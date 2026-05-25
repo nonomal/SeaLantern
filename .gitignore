@@ -3,6 +3,9 @@ dist/
 src-tauri/target/
 target/
 
+# panic 崩溃报告日志（忽略文件内容，但保留目录本身由 panic-log/.gitkeep 追踪）
+panic-log/*.log
+
 .idea/
 *.log
 .DS_Store
@@ -14,8 +17,17 @@ bun.lock
 nul
 changelogs/
 .claude/
+.codex
 .trae/
 changelog/
 .review/
 plugin-market/
 plugins-demo/
+
+# About OpenCode
+.opencode/
+.playwright-mcp/
+
+#docker test
+data/
+CLAUDE.md

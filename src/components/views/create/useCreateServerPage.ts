@@ -1,4 +1,5 @@
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onActivated, onMounted, onUnmounted, ref, watch } from "vue";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRouter } from "vue-router";
 import { appendCustomCandidate } from "@components/views/create/createServerWorkflow";
 import type { StartupCandidate } from "@components/views/create/startupTypes";
@@ -17,12 +18,54 @@ import { useMessage } from "@composables/useMessage";
 import { useLoading } from "@composables/useAsync";
 import { i18n } from "@language";
 import { useServerStore } from "@stores/serverStore";
+import { useCreateServerDraftStore } from "@stores/createServerDraft.ts";
+import { isBrowserEnv } from "@api/tauri";
+
+// UUID 生成函数（用于前端备用方案）
+function generateUUID(): string {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 
 type SourceType = "archive" | "folder" | "";
 
+function inferSourceType(path: string): SourceType {
+  const lowerPath = path.toLowerCase();
+  if (
+    lowerPath.endsWith(".zip") ||
+    lowerPath.endsWith(".tar") ||
+    lowerPath.endsWith(".tar.gz") ||
+    lowerPath.endsWith(".tgz") ||
+    lowerPath.endsWith(".jar")
+  ) {
+    return "archive";
+  }
+  return "folder";
+}
+
+function parseNumber(value: string, fallbackValue: number): number {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? fallbackValue : parsed;
+}
+
+export const CREATE_SERVER_SOURCE_DROP_EVENT = "create-server-source-drop";
+const CREATE_SERVER_DND_DEBUG = import.meta.env.DEV;
+
+function logCreateServerDnd(message: string, payload?: unknown) {
+  if (!CREATE_SERVER_DND_DEBUG) return;
+  if (payload === undefined) {
+    console.debug(message);
+    return;
+  }
+  console.debug(message, payload);
+}
+
 export function useCreateServerPage() {
   const router = useRouter();
-  const store = useServerStore();
+  const serverstore = useServerStore();
   const { error: errorMsg, showError, clearError } = useMessage();
   const { loading: javaLoading, start: startJavaLoading, stop: stopJavaLoading } = useLoading();
   const { loading: creating, start: startCreating, stop: stopCreating } = useLoading();
@@ -53,6 +96,7 @@ export function useCreateServerPage() {
 
   const AUTO_SCAN_DEBOUNCE_MS = 120;
   let startupDetectTimer: ReturnType<typeof setTimeout> | null = null;
+  let unlistenSourceDropEvent: UnlistenFn | null = null;
 
   const runPathOverwriteRisk = ref(false);
   const RUN_PATH_CONFLICT_DEBOUNCE_MS = 180;
@@ -92,14 +136,11 @@ export function useCreateServerPage() {
     if (selectedStartup.value.mode === "custom") {
       return customStartupCommand.value.trim().length > 0 && !customCommandHasRedirect.value;
     }
-    if (
+    return !(
       selectedStartup.value.mode === "starter" &&
       mcVersionDetectionFailed.value &&
       selectedMcVersion.value.trim().length === 0
-    ) {
-      return false;
-    }
-    return true;
+    );
   });
 
   const hasJava = computed(() => selectedJava.value.trim().length > 0);
@@ -166,8 +207,33 @@ export function useCreateServerPage() {
     () => step4Completed.value && !startupSyncPending.value && !startupDetecting.value,
   );
 
+  onActivated(() => {
+    loadFromDraft();
+  });
+
   onMounted(async () => {
     await loadDefaultSettings();
+
+    if (!isBrowserEnv()) {
+      try {
+        unlistenSourceDropEvent = await listen<string[]>(
+          CREATE_SERVER_SOURCE_DROP_EVENT,
+          (event) => {
+            const droppedPaths = Array.isArray(event.payload) ? event.payload : [];
+            logCreateServerDnd("[useCreateServerPage] Received source drop event", droppedPaths);
+            if (droppedPaths.length === 0) {
+              return;
+            }
+
+            const path = droppedPaths[0];
+            sourcePath.value = path;
+            sourceType.value = inferSourceType(path);
+          },
+        );
+      } catch (error) {
+        logCreateServerDnd("[useCreateServerPage] Failed to register source drop listener", error);
+      }
+    }
   });
 
   onUnmounted(() => {
@@ -178,6 +244,10 @@ export function useCreateServerPage() {
     if (runPathConflictTimer) {
       clearTimeout(runPathConflictTimer);
       runPathConflictTimer = null;
+    }
+    if (unlistenSourceDropEvent) {
+      unlistenSourceDropEvent();
+      unlistenSourceDropEvent = null;
     }
   });
 
@@ -261,11 +331,6 @@ export function useCreateServerPage() {
     { immediate: true },
   );
 
-  function parseNumber(value: string, fallbackValue: number): number {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackValue;
-  }
-
   async function loadDefaultSettings() {
     try {
       const settings = await settingsApi.get();
@@ -274,16 +339,30 @@ export function useCreateServerPage() {
       minMemory.value = String(settings.default_min_memory);
       port.value = String(settings.default_port);
 
-      // 加载上次选择的开服路径
-      if (settings.last_run_path) {
-        runPath.value = settings.last_run_path;
-      } else {
-        // 如果没有上次的路径，获取默认路径
+      // Docker 环境下强制使用默认路径，忽略已保存的路径设置
+      if (isBrowserEnv()) {
         try {
           const defaultPath = await systemApi.getDefaultRunPath();
-          runPath.value = defaultPath;
+          // 在Docker环境下，生成UUID并显示完整路径
+          const uuid = generateUUID().replace(/-/g, "").substring(0, 30);
+          runPath.value = `${defaultPath}/${uuid}`;
         } catch (error) {
           console.error("Failed to get default run path:", error);
+          // 即使API调用失败，也设置一个合理的默认值
+          const uuid = generateUUID().replace(/-/g, "").substring(0, 30);
+          runPath.value = `./data/${uuid}`;
+        }
+      } else {
+        // 非 Docker 环境下加载上次选择的开服路径
+        if (settings.last_run_path) {
+          runPath.value = settings.last_run_path;
+        } else {
+          // 如果没有上次的路径，获取默认路径
+          try {
+            runPath.value = await systemApi.getDefaultRunPath();
+          } catch (error) {
+            console.error("Failed to get default run path:", error);
+          }
         }
       }
 
@@ -300,6 +379,15 @@ export function useCreateServerPage() {
       }
     } catch (error) {
       console.error("Failed to load default settings:", error);
+    }
+  }
+
+  function loadFromDraft() {
+    const draftStore = useCreateServerDraftStore();
+    const draft = draftStore.consumeDraft();
+    if (draft !== null) {
+      sourcePath.value = draft.sourcePath;
+      sourceType.value = draft.sourceType;
     }
   }
 
@@ -325,6 +413,29 @@ export function useCreateServerPage() {
   }
 
   async function pickRunPath() {
+    // Docker 环境下禁用文件选择器，使用默认路径
+    if (isBrowserEnv()) {
+      try {
+        const defaultPath = await systemApi.getDefaultRunPath();
+        // 在Docker环境下，生成UUID并显示完整路径
+        const uuid = generateUUID().replace(/-/g, "").substring(0, 30);
+        const fullPath = `${defaultPath}/${uuid}`;
+        updateRunPath(fullPath);
+        // 保存选择的开服路径
+        try {
+          await settingsApi.updatePartial({ last_run_path: fullPath });
+        } catch (error) {
+          console.error("Failed to save last run path:", error);
+        }
+      } catch (error) {
+        console.error("Failed to get default run path:", error);
+        // 即使API调用失败，也设置一个合理的默认值（包含UUID）
+        const uuid = generateUUID().replace(/-/g, "").substring(0, 30);
+        updateRunPath(`./data/${uuid}`);
+      }
+      return;
+    }
+
     const selected = await systemApi.pickFolder();
     if (selected) {
       updateRunPath(selected);
@@ -525,12 +636,36 @@ export function useCreateServerPage() {
         mcVersion: resolvedMcVersion || undefined,
       });
 
-      await store.refreshList();
+      await serverstore.refreshList();
       router.push("/");
     } catch (error) {
       showError(String(error));
     } finally {
       stopCreating();
+    }
+  }
+
+  /**
+   * 处理 Tauri 文件拖放事件
+   * 根据文件扩展名自动识别为压缩包或文件夹
+   */
+  function handleTauriDrop(paths: string[]) {
+    if (paths.length === 0) return;
+
+    const archiveExtensions = [".zip", ".tar", ".tar.gz", ".tgz", ".jar"];
+
+    function hasArchiveExtension(path: string): boolean {
+      const lowerPath = path.toLowerCase();
+      return archiveExtensions.some((ext) => lowerPath.endsWith(ext));
+    }
+
+    const firstPath = paths[0];
+    if (hasArchiveExtension(firstPath)) {
+      sourcePath.value = firstPath;
+      sourceType.value = "archive";
+    } else {
+      sourcePath.value = firstPath;
+      sourceType.value = "folder";
     }
   }
 
@@ -575,5 +710,6 @@ export function useCreateServerPage() {
     rescanStartupCandidates,
     detectJava,
     handleSubmit,
+    handleTauriDrop,
   };
 }

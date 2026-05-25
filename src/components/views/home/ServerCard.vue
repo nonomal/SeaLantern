@@ -19,6 +19,7 @@ import {
   saveServerName,
   cancelEdit,
   showDeleteConfirmInput,
+  showChangePathModal,
 } from "@utils/serverUtils";
 import { useServerStore } from "@stores/serverStore";
 
@@ -45,6 +46,11 @@ function handleConsole() {
 function handleConfig() {
   store.setCurrentServer(props.server.id);
   router.push("/config/" + props.server.id);
+}
+
+function handleStartupConfig() {
+  store.setCurrentServer(props.server.id);
+  router.push({ path: "/config/" + props.server.id, query: { tab: "startup" } });
 }
 
 function getStatusClass(status: string | undefined): string {
@@ -108,7 +114,7 @@ function getStatusClass(status: string | undefined): string {
       <div class="server-meta">
         <span class="meta-tag core-type">{{ server.core_type }}</span>
         <span class="meta-tag">{{ i18n.t("home.port") }} {{ server.port }}</span>
-        <span class="meta-tag">{{ server.max_memory }}MB</span>
+        <span class="meta-tag" @click="handleStartupConfig">{{ server.max_memory }}MB</span>
       </div>
     </div>
 
@@ -154,6 +160,9 @@ function getStatusClass(status: string | undefined): string {
         </SLButton>
         <SLButton variant="ghost" size="sm" @click="handleConfig">
           {{ i18n.t("common.config_edit") }}
+        </SLButton>
+        <SLButton variant="ghost" size="sm" @click="showChangePathModal(server)">
+          {{ i18n.t("home.change_path") }}
         </SLButton>
         <SLButton variant="ghost" size="sm" @click="showDeleteConfirmInput(server)">
           {{ i18n.t("home.delete") }}
@@ -386,6 +395,11 @@ function getStatusClass(status: string | undefined): string {
   white-space: nowrap;
   border: 1px solid var(--sl-border);
   transition: all 0.2s ease;
+}
+
+.meta-tag[onclick],
+.meta-tag:hover {
+  cursor: pointer;
 }
 
 .meta-tag:hover {

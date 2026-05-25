@@ -1,277 +1,96 @@
+//! panic_report.rs
+//! 负责在程序崩溃（panic）时收集系统信息并生成崩溃日志。
+//!
+//! 通过 Rust 标准库的 `std::panic::set_hook` 注册全局 panic 回调，
+//! 无需汇编或 unsafe 代码，全平台兼容（Linux / macOS / Windows）。
+//! 系统信息（内存、CPU 温度、句柄数）通过已有依赖 `sysinfo` 跨平台获取，
+//! 不再依赖 Linux 专有的 /proc、/sys 虚拟文件系统。
+//!
+//! 日志输出目录：项目根目录（dev 模式）或可执行文件同级的 `panic-log/` 文件夹。
+//! 日志文件名格式：`panic_<YYYYMMDD_HHMMSS_mmm>.log`，以崩溃时间戳命名，不会覆盖旧日志。
+
+mod pathing;
+mod system_info;
+
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-#[repr(C, align(64))]
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
-struct Regs {
-    rax: u64,
-    rbx: u64,
-    rcx: u64,
-    rdx: u64,
-    rsi: u64,
-    rdi: u64,
-    rbp: u64,
-    rsp: u64,
-    r8: u64,
-    r9: u64,
-    r10: u64,
-    r11: u64,
-    r12: u64,
-    r13: u64,
-    r14: u64,
-    r15: u64,
-    rip: u64,
-    rflags: u64,
+use chrono::Utc;
 
-    cs: u64,
-    ds: u64,
-    es: u64,
-    fs: u64,
-    gs: u64,
-    ss: u64,
+/// 记录程序启动时间，用于在崩溃日志中展示运行时长
+/// 使用 OnceLock 保证只初始化一次，线程安全
+static START_TIME: OnceLock<chrono::DateTime<Utc>> = OnceLock::new();
 
-    fxsave_area: [u8; 512],
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
-extern "C" {
-    fn getregs(regs: *mut Regs);
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
-static START_TIME: OnceLock<SystemTime> = OnceLock::new();
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
+/// 防止 panic hook 重入的标志
+/// 若 panic hook 自身触发了新的 panic，此标志可避免无限递归
 static PANIC_HOOK_RUNNING: AtomicBool = AtomicBool::new(false);
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
-#[allow(deprecated)]
-pub async fn panic_report() {
-    START_TIME.set(SystemTime::now()).unwrap();
+/// 注册全局 panic hook
+///
+/// 应在程序启动时尽早调用
+/// 以确保所有 panic 都能被捕获并生成日志
+pub fn init_panic_hook() {
+    START_TIME.get_or_init(Utc::now);
+
     std::panic::set_hook(Box::new(|panic_info| {
         if PANIC_HOOK_RUNNING.swap(true, Ordering::SeqCst) {
             return;
         }
 
-        let mut regs = Regs {
-            rax: 0,
-            rbx: 0,
-            rcx: 0,
-            rdx: 0,
-            rsi: 0,
-            rdi: 0,
-            rbp: 0,
-            rsp: 0,
-            r8: 0,
-            r9: 0,
-            r10: 0,
-            r11: 0,
-            r12: 0,
-            r13: 0,
-            r14: 0,
-            r15: 0,
-            rip: 0,
-            rflags: 0,
-            cs: 0,
-            ds: 0,
-            es: 0,
-            fs: 0,
-            gs: 0,
-            ss: 0,
-            fxsave_area: [0; 512],
-        };
-        unsafe {
-            getregs(&mut regs);
-        }
-        let start_time = format_time(START_TIME.get().expect("start time not set").clone());
-        let crash_time = format_time(SystemTime::now());
-        let os_info = fs::read_to_string("/proc/version").unwrap_or_else(|_| "Unknown".to_string());
-        let stack_range = get_stack_range();
-        let stack_used = stack_range
-            .clone()
-            .map(|(_, end)| end.saturating_sub(regs.rsp))
-            .unwrap_or(0);
-        let cpu_temp = get_cpu_temperature();
-        let mem_load = get_memory_load();
-        let handle_count = fs::read_dir("/proc/self/fd")
-            .map(|e| e.count())
-            .unwrap_or(0);
+        let crash_time = Utc::now();
+        let start_time = *START_TIME.get().unwrap_or(&crash_time);
+        let crash_time_str = crash_time.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
+        let start_time_str = start_time.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
+        let panic_message = panic_info.to_string();
+        let location = panic_info
+            .location()
+            .map(|location| {
+                format!("{}:{}:{}", location.file(), location.line(), location.column())
+            })
+            .unwrap_or_else(|| "unknown location".to_string());
+
+        let os_info = system_info::get_os_info();
+        let cpu_temp = system_info::get_cpu_temperature();
+        let mem_load = system_info::get_memory_load();
+        let handle_count = system_info::get_handle_count();
         let cpu_cores = std::thread::available_parallelism()
-            .map(|n| n.get())
+            .map(|count| count.get())
             .unwrap_or(1);
 
-        let script = format!(
-            r#"
-                panicreportname={}
-                rm -r $panicreportname
-                touch $panicreportname
-                echo "============!Panicked!============" >> $panicreportname
-                echo "===============Info===============" >> $panicreportname
-                echo "Panic Time : {}" >> $panicreportname
-                echo "Start Time : {}" >> $panicreportname
-                echo "OS : {}" >> $panicreportname
-                echo "Stack Range : {:?}" >> $panicreportname
-                echo "Stack Used : {}" >> $panicreportname
-                echo "CPU Temprature : {}" >> $panicreportname
-                echo "Loaded Memory : {}" >> $panicreportname
-                echo "Handle Counts : {}" >> $panicreportname
-                echo "CPU Cores : {}" >> $panicreportname
-                echo "============Registers=============" >> $panicreportname
-                echo "RAX : {}" >> $panicreportname
-                echo "RBX : {}" >> $panicreportname
-                echo "RCX : {}" >> $panicreportname
-                echo "RDX : {}" >> $panicreportname
-                echo "RSI : {}" >> $panicreportname
-                echo "RDI : {}" >> $panicreportname
-                echo "RBP : {}" >> $panicreportname
-                echo "RSP : {}" >> $panicreportname
-                echo "R8  : {}" >> $panicreportname
-                echo "R9  : {}" >> $panicreportname
-                echo "R10 : {}" >> $panicreportname
-                echo "R11 : {}" >> $panicreportname
-                echo "R12 : {}" >> $panicreportname
-                echo "R13 : {}" >> $panicreportname
-                echo "R14 : {}" >> $panicreportname
-                echo "R15 : {}" >> $panicreportname
-                echo "RIP : {}" >> $panicreportname
-                echo "RFLAGS : {}" >> $panicreportname
-                echo "CS : {}" >> $panicreportname
-                echo "DS : {}" >> $panicreportname
-                echo "ES : {}" >> $panicreportname
-                echo "FS : {}" >> $panicreportname
-                echo "GS : {}" >> $panicreportname
-                echo "SS : {}" >> $panicreportname
-                echo "FXSAVEAREA : {:?}" >> $panicreportname
-                echo "============Panic Info============" >> $panicreportname
-                echo "{}" >> $panicreportname
-                echo "============ReportEnds============" >> $panicreportname
-                echo "Sea Lantern PANICKED!!"
-            "#,
-            shlex::quote("Panic_Report"),
-            shlex::quote(&crash_time.to_string()),
-            shlex::quote(&start_time.to_string()),
-            shlex::quote(&os_info.to_string()),
-            shlex::quote(&format!("{:?}", stack_range)),
-            shlex::quote(&stack_used.to_string()),
-            shlex::quote(&cpu_temp.to_string()),
-            shlex::quote(&mem_load.to_string()),
-            shlex::quote(&handle_count.to_string()),
-            shlex::quote(&cpu_cores.to_string()),
-            shlex::quote(&regs.rax.to_string()),
-            shlex::quote(&regs.rbx.to_string()),
-            shlex::quote(&regs.rcx.to_string()),
-            shlex::quote(&regs.rdx.to_string()),
-            shlex::quote(&regs.rsi.to_string()),
-            shlex::quote(&regs.rdi.to_string()),
-            shlex::quote(&regs.rbp.to_string()),
-            shlex::quote(&regs.rsp.to_string()),
-            shlex::quote(&regs.r8.to_string()),
-            shlex::quote(&regs.r9.to_string()),
-            shlex::quote(&regs.r10.to_string()),
-            shlex::quote(&regs.r11.to_string()),
-            shlex::quote(&regs.r12.to_string()),
-            shlex::quote(&regs.r13.to_string()),
-            shlex::quote(&regs.r14.to_string()),
-            shlex::quote(&regs.r15.to_string()),
-            shlex::quote(&regs.rip.to_string()),
-            shlex::quote(&regs.rflags.to_string()),
-            shlex::quote(&regs.cs.to_string()),
-            shlex::quote(&regs.ds.to_string()),
-            shlex::quote(&regs.es.to_string()),
-            shlex::quote(&regs.fs.to_string()),
-            shlex::quote(&regs.gs.to_string()),
-            shlex::quote(&regs.ss.to_string()),
-            shlex::quote(format!("{:?}", &regs.fxsave_area).as_str()),
-            shlex::quote(&panic_info.to_string()),
+        let report = format!(
+            "============!Panicked!============\n\
+             ===============Info===============\n\
+             Panic Time  : {crash_time_str}\n\
+             Start Time  : {start_time_str}\n\
+             OS          : {os_info}\n\
+             CPU Temp    : {cpu_temp}\n\
+             Loaded Mem  : {mem_load:.2}%\n\
+             Handle Count: {handle_count}\n\
+             CPU Cores   : {cpu_cores}\n\
+             ============Panic Info============\n\
+             Location    : {location}\n\
+             Message     : {panic_message}\n\
+             ============ReportEnds============\n",
         );
 
-        let cmd = std::process::Command::new("bash")
-            .arg("-c")
-            .arg(&script)
-            .status()
-            .expect("");
-
-        if cmd.success() {
-            println!("PANICKED!");
+        match pathing::build_report_path(&crash_time) {
+            Ok(path) => {
+                if let Err(err) = fs::write(&path, &report) {
+                    eprintln!("Failed to write panic log to '{}': {err}", path.display());
+                } else {
+                    println!("Panic log written to '{}'", path.display());
+                }
+            }
+            Err(err) => {
+                eprintln!("Failed to prepare panic-log directory: {err}");
+            }
         }
 
+        eprintln!("{report}");
+        eprintln!("Sea Lantern PANICKED!!");
+
+        PANIC_HOOK_RUNNING.store(false, Ordering::SeqCst);
         std::process::exit(0xFFFF);
     }));
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
-fn format_time(t: SystemTime) -> String {
-    let since_epoch = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let millis = since_epoch.as_millis();
-    format!("{:?} ({} ms since epoch)", t, millis)
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
-fn get_stack_range() -> Option<(u64, u64)> {
-    for line in fs::read_to_string("/proc/self/maps").ok()?.lines() {
-        if line.contains("[stack]") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if let Some(range) = parts.get(0) {
-                let addrs: Vec<&str> = range.split('-').collect();
-                if addrs.len() == 2 {
-                    let start = u64::from_str_radix(addrs[0], 16).ok()?;
-                    let end = u64::from_str_radix(addrs[1], 16).ok()?;
-                    return Some((start, end));
-                }
-            }
-        }
-    }
-    None
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
-fn get_cpu_temperature() -> String {
-    if let Ok(entries) = fs::read_dir("/sys/class/thermal") {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.to_string_lossy().contains("thermal_zone") {
-                let temp_path = path.join("temp");
-                if let Ok(temp_str) = fs::read_to_string(&temp_path) {
-                    if let Ok(millideg) = temp_str.trim().parse::<f64>() {
-                        return format!("{:.2}", millideg / 1000.0);
-                    }
-                }
-            }
-        }
-    }
-    "N/A".to_string()
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::all)]
-fn get_memory_load() -> f64 {
-    if let Ok(meminfo) = fs::read_to_string("/proc/meminfo") {
-        let mut total = 0u64;
-        let mut available = 0u64;
-        for line in meminfo.lines() {
-            if line.starts_with("MemTotal:") {
-                if let Some(val) = line.split_whitespace().nth(1) {
-                    total = val.parse().unwrap_or(0);
-                }
-            } else if line.starts_with("MemAvailable:") {
-                if let Some(val) = line.split_whitespace().nth(1) {
-                    available = val.parse().unwrap_or(0);
-                }
-            }
-        }
-        if total > 0 {
-            return (total.saturating_sub(available) as f64 / total as f64) * 100.0;
-        }
-    }
-    0.0
 }

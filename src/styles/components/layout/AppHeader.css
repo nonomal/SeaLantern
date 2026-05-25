@@ -10,6 +10,22 @@
   user-select: none;
   position: relative;
   z-index: 100;
+  -webkit-app-region: no-drag;
+}
+
+.app-header.macos-overlay {
+  height: var(--sl-header-height);
+  padding-top: 0;
+  padding-left: calc(var(--sl-space-lg) + 84px);
+  border-bottom: 1px solid var(--sl-border-light);
+  background: var(--sl-bg);
+  -webkit-app-region: drag;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+[data-theme="dark"] .app-header.macos-overlay {
+  border-bottom: 1px solid var(--sl-border-light);
 }
 
 [data-acrylic="true"] .app-header {
@@ -20,7 +36,6 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
 
-.header-left,
 .header-right {
   -webkit-app-region: no-drag;
 }
@@ -38,6 +53,14 @@
   -webkit-app-region: drag;
 }
 
+.app-header.macos-overlay .header-center {
+  min-height: var(--sl-header-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -51,6 +74,10 @@
   padding: 4px 8px;
   background: var(--sl-bg-secondary);
   border-radius: var(--sl-radius-full);
+  -webkit-app-region: no-drag;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .status-dot {
@@ -68,6 +95,9 @@
 .status-text {
   font-size: var(--sl-font-size-sm);
   color: var(--sl-text-secondary);
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .window-controls {
@@ -256,6 +286,11 @@
   transform: translateX(2px) scale(0.98);
 }
 
+.language-item.active {
+  background: var(--sl-primary-bg);
+  color: var(--sl-primary);
+}
+
 .language-item-main {
   flex: 1;
 }
@@ -272,13 +307,42 @@
   grid-column: span 2;
 }
 
+.language-more-list {
+  grid-column: span 2;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+  overflow: hidden;
+}
+
 .language-item-arrow {
   justify-content: center;
 }
 
 .arrow-icon {
   color: var(--sl-text-secondary);
-  transition: transform var(--sl-transition-fast);
+}
+
+.language-toggle-enter-active,
+.language-toggle-leave-active {
+  transition:
+    max-height 0.2s ease,
+    opacity 0.16s ease,
+    transform 0.2s ease;
+}
+
+.language-toggle-enter-from,
+.language-toggle-leave-to {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.language-toggle-enter-to,
+.language-toggle-leave-from {
+  max-height: 240px;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .click-outside {

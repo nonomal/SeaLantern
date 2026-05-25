@@ -39,8 +39,6 @@ pub struct ServerInstance {
     #[serde(default)]
     pub custom_command: Option<String>,
     pub java_path: String,
-    pub max_memory: u32,
-    pub min_memory: u32,
     pub jvm_args: Vec<String>,
     pub port: u16,
     pub created_at: u64,
@@ -53,6 +51,8 @@ pub struct ServerStatusInfo {
     pub status: ServerStatus,
     pub pid: Option<u32>,
     pub uptime: Option<u64>,
+    #[serde(default)]
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,4 +150,14 @@ pub struct StartupCandidateItem {
     pub detail: String,
     pub path: String,
     pub recommended: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidateServerPathResult {
+    pub valid: bool,
+    pub message: String,
+    #[serde(default)]
+    pub jar_path: Option<String>,
+    #[serde(default)]
+    pub startup_mode: Option<String>,
 }
