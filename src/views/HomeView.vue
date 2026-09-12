@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from "vue";
+// keep-alive 缓存时 onUnmounted 不触发,改用 onActivated/onDeactivated 管理定时器与监听
+import { onActivated, onDeactivated } from "vue";
 import { useRouter } from "vue-router";
 import ErrorBanner from "@components/views/home/ErrorBanner.vue";
 import QuickStartCard from "@components/views/home/QuickStartCard.vue";
 import SystemStatsCard from "@components/views/home/SystemStatsCard.vue";
 import ServerListSection from "@components/views/home/ServerListSection.vue";
 import AlertsSection from "@components/views/home/AlertsSection.vue";
+import ChangePathModal from "@components/views/home/ChangePathModal.vue";
 import SLConfirmDialog from "@components/common/SLConfirmDialog.vue";
 import { useServerStore } from "@stores/serverStore";
 import { initQuote, startQuoteTimer, cleanupQuoteResources } from "@utils/quoteUtils";
@@ -25,14 +27,52 @@ const store = useServerStore();
 
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
+// 页面隐藏时暂停轮询,避免后台无意义 CPU/IO 开销
+let isPageVisible = true;
 
-onMounted(() => {
+const refreshAllStatuses = async () => {
+  await Promise.all(store.servers.map((s) => store.refreshStatus(s.id)));
+};
+
+const startTimers = () => {
+  stopTimers();
+  // 资源看板与服务器状态统一 3 秒刷新
+  statsTimer = setInterval(fetchSystemInfo, 3000);
+  refreshTimer = setInterval(refreshAllStatuses, 3000);
+};
+
+const stopTimers = () => {
+  if (statsTimer) {
+    clearInterval(statsTimer);
+    statsTimer = null;
+  }
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+};
+
+const handleVisibilityChange = () => {
+  const visible = document.visibilityState === "visible";
+  if (visible === isPageVisible) return;
+  isPageVisible = visible;
+  if (visible) {
+    // 重新可见时立即刷新一次并重启轮询
+    fetchSystemInfo();
+    refreshAllStatuses();
+    startTimers();
+  } else {
+    stopTimers();
+  }
+};
+
+onActivated(() => {
   initQuote();
 
   const loadServers = async () => {
     try {
       await store.refreshList();
-      await Promise.all(store.servers.map((s) => store.refreshStatus(s.id)));
+      await refreshAllStatuses();
     } catch (e) {
       console.error("Failed to load servers:", e);
     }
@@ -40,22 +80,17 @@ onMounted(() => {
 
   loadServers();
   fetchSystemInfo();
-
-  statsTimer = setInterval(fetchSystemInfo, 3000);
+  startTimers();
   startQuoteTimer();
-
-  refreshTimer = setInterval(async () => {
-    await Promise.all(store.servers.map((s) => store.refreshStatus(s.id)));
-  }, 3000);
-
   startThemeObserver();
+  document.addEventListener("visibilitychange", handleVisibilityChange);
 });
 
-onUnmounted(() => {
-  if (statsTimer) clearInterval(statsTimer);
-  if (refreshTimer) clearInterval(refreshTimer);
+onDeactivated(() => {
+  stopTimers();
   cleanupQuoteResources();
   cleanupStatsResources();
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
 });
 
 function handleCreate() {
@@ -64,7 +99,7 @@ function handleCreate() {
 </script>
 
 <template>
-  <div class="home-view animate-fade-in-up">
+  <div class="home-view animate-stagger-in">
     <ErrorBanner :message="actionError" @close="actionError = null" />
 
     <div class="top-row">
@@ -75,6 +110,8 @@ function handleCreate() {
     <ServerListSection :servers="store.servers" :loading="store.loading" />
 
     <AlertsSection />
+
+    <ChangePathModal />
 
     <SLConfirmDialog
       :visible="showDeleteConfirm"

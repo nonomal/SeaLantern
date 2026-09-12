@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import SLInput from "@components/common/SLInput.vue";
 import type { SourceType } from "@components/views/create/SourceIntakeField.vue";
 import { getPathName, normalizePathForCompare } from "@components/views/create/startupUtils";
 import { i18n } from "@language";
+import { isBrowserEnv } from "@api/tauri";
 
 const props = withDefaults(
   defineProps<{
@@ -25,6 +25,7 @@ const emit = defineEmits<{
 }>();
 
 const inputDisabled = computed(() => props.disabled);
+const isDockerEnv = computed(() => isBrowserEnv());
 
 const effectivePath = computed(() => {
   if (props.sourceType !== "folder") {
@@ -49,7 +50,7 @@ const effectivePath = computed(() => {
 
     <div class="run-path-row">
       <span class="run-path-label">{{ i18n.t("create.path_label") }}</span>
-      <SLInput
+      <cmz-input
         class="run-path-input"
         :model-value="runPath"
         :disabled="inputDisabled"
@@ -59,14 +60,14 @@ const effectivePath = computed(() => {
         <template #suffix>
           <button
             type="button"
-            class="sl-input-action"
+            class="cmz-input-action"
             :disabled="inputDisabled"
             @click="emit('pickPath')"
           >
             {{ i18n.t("create.browse") }}
           </button>
         </template>
-      </SLInput>
+      </cmz-input>
     </div>
 
     <p v-if="showOverwriteWarning" class="run-path-overwrite-warning">
@@ -75,6 +76,10 @@ const effectivePath = computed(() => {
 
     <p v-if="sourceType === 'folder'" class="run-path-effective">
       {{ i18n.t("create.path_effective_label") }} {{ getPathName(effectivePath) || "-" }}
+    </p>
+
+    <p v-if="isDockerEnv" class="run-path-docker-hint">
+      {{ i18n.t("create.path_docker_hint") }}
     </p>
   </div>
 </template>

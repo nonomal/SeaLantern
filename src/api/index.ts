@@ -3,8 +3,14 @@
  * 所有 API 模块统一从此处导入
  */
 
-export { tauriInvoke, tauriInvokeAll, createCachedInvoke } from "@api/tauri";
+export { tauriInvoke } from "@api/tauri";
 export type { InvokeOptions } from "@api/tauri";
+export { desktopApi } from "@api/desktop";
+export type { WindowMaterial, WindowTheme } from "@api/desktop";
+
+// 统一后端调用入口,Tauri/Axum 双模式自动分发
+export { invoke } from "@api/invoke";
+export type { SilentWithOptions } from "@api/invoke";
 
 export { serverApi } from "@api/server";
 export type { ServerStatusInfo } from "@api/server";
@@ -16,10 +22,13 @@ export { configApi } from "@api/config";
 export type { ConfigEntry, ServerProperties } from "@api/config";
 
 export { playerApi } from "@api/player";
-export type { PlayerEntry, BanEntry, OpEntry } from "@api/player";
+export type { PlayerEntry, BanEntry, OpEntry, PlayerProfile } from "@api/player";
 
 export { settingsApi, getSystemFonts } from "@api/settings";
 export type { AppSettings } from "@api/settings";
+
+export { tunnelApi, onTunnelEvent } from "@api/tunnel";
+export type { TunnelStatus, TunnelConnection, OnlineTunnelEvent } from "@api/tunnel";
 
 export { systemApi } from "@api/system";
 export type {
@@ -32,6 +41,9 @@ export type {
   NetworkInfo,
   SystemInfo,
 } from "@api/system";
+
+export { searchResources } from "@api/resource";
+export type { ResourceSearchResult } from "@api/resource";
 
 export * from "@api/update";
 export * from "@api/plugin";

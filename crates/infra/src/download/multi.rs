@@ -1,0 +1,119 @@
+//! 多线程文件下载器实现。
+//!
+//! `Downloader` 不对外公开，多线程下载请通过 `DownloadManager` 使用。
+
+use std::sync::Arc;
+
+use crate::download::single::stream_download;
+use crate::download::status::{DownloadError, DownloadStatus};
+use crate::download::tasks::{spawn_download_tasks, spawn_task_monitor};
+use crate::net::ClientProvider;
+use crate::observability;
+
+/// 多线程下载器。
+///
+/// 持有一个客户端获取器（provider），在每次下载开始时获取当前
+/// 全局客户端，避免缓存固定客户端导致代理更新不生效。
+pub(crate) struct Downloader {
+    client_provider: ClientProvider,
+}
+
+impl Downloader {
+    /// 创建一个下载器。
+    ///
+    /// # Parameters
+    ///
+    /// - `client_provider`: 每次下载开始时调用的客户端获取器
+    pub(crate) fn new(client_provider: ClientProvider) -> Self {
+        Self { client_provider }
+    }
+
+    /// 下载文件并返回一个可查询进度的状态句柄。
+    ///
+    /// 流程：
+    /// 1. 获取当前全局客户端并探测远端文件信息（是否支持 Range、文件大小）
+    /// 2. 创建并预分配本地文件
+    /// 3. 根据 Range 支持情况选择分段或单线程下载
+    /// 4. 启动后台监控任务以汇总各段结果
+    ///
+    /// # Parameters
+    ///
+    /// - `url`: 下载地址
+    /// - `output_path`: 本地保存路径
+    /// - `thread_count`: 下载线程数
+    ///
+    /// # Returns
+    ///
+    /// 返回 `Arc<DownloadStatus>`，可通过 `snapshot()` 查询实时进度。
+    pub async fn download(
+        &self,
+        url: &str,
+        output_path: &str,
+        thread_count: usize,
+    ) -> Result<Arc<DownloadStatus>, DownloadError> {
+        if thread_count == 0 {
+            return Err(DownloadError::Message("Thread count must be positive".to_string()));
+        }
+
+        let client = (self.client_provider)()?;
+        let remote = client.probe(url).await?;
+
+        // 服务器未提供 Content-Length（如 chunked 响应）：多线程分段无法预分配，
+        // 改用单线程流式下载，避免「建空文件 + 立即标记完成」的状态失效。
+        if remote.total_size == 0 {
+            return stream_download(&client, url, output_path).await;
+        }
+
+        let actual_thread_count = if remote.supports_range {
+            thread_count
+        } else {
+            1
+        };
+
+        if let Some(parent) = std::path::Path::new(output_path).parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let file = tokio::fs::File::create(output_path).await?;
+
+        file.set_len(remote.total_size).await?;
+
+        drop(file);
+
+        let status = Arc::new(DownloadStatus::new(remote.total_size));
+
+        observability::download_started(url, remote.total_size, actual_thread_count);
+
+        let tasks = spawn_download_tasks(
+            client.clone(),
+            url.to_string(),
+            output_path.to_string(),
+            actual_thread_count,
+            remote.total_size,
+            &status,
+        );
+
+        spawn_task_monitor(tasks, &status, url.to_string(), remote.total_size);
+
+        Ok(status)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::NetClient;
+
+    fn test_client_provider() -> ClientProvider {
+        Box::new(|| NetClient::from_config(&Default::default()))
+    }
+
+    #[tokio::test]
+    async fn downloader_creation() {
+        let downloader = Downloader::new(test_client_provider());
+        let result = downloader
+            .download("https://example.com/test", "/tmp/test", 0)
+            .await;
+        assert!(result.is_err());
+    }
+}

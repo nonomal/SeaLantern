@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import SLInput from "@components/common/SLInput.vue";
-import SLSwitch from "@components/common/SLSwitch.vue";
 import { i18n } from "@language";
 
 const props = defineProps<{
@@ -23,7 +21,10 @@ function handleNumberInput(event: Event, type: "maxMemory" | "minMemory" | "port
   const target = event.target as HTMLInputElement;
   const value = target.value;
   if (value === "" || /^\d+$/.test(value)) {
-    emit(`update:${type}`, value);
+    // emit 是具名重载,按类型显式分发,避免模板字符串联合类型不匹配
+    if (type === "maxMemory") emit("update:maxMemory", value);
+    else if (type === "minMemory") emit("update:minMemory", value);
+    else emit("update:port", value);
   }
 }
 </script>
@@ -33,7 +34,7 @@ function handleNumberInput(event: Event, type: "maxMemory" | "minMemory" | "port
     <div class="startup-list">
       <div class="startup-row">
         <span class="startup-row-label">{{ i18n.t("create.server_name") }}</span>
-        <SLInput
+        <cmz-input
           :placeholder="i18n.t('create.server_name')"
           :model-value="serverName"
           @update:model-value="$emit('update:serverName', $event)"
@@ -43,7 +44,7 @@ function handleNumberInput(event: Event, type: "maxMemory" | "minMemory" | "port
       <div class="startup-pair-row">
         <div class="startup-pair-item">
           <span class="startup-row-label">{{ i18n.t("create.max_memory") }}</span>
-          <SLInput
+          <cmz-input
             type="text"
             :model-value="maxMemory"
             @input="handleNumberInput($event, 'maxMemory')"
@@ -51,7 +52,7 @@ function handleNumberInput(event: Event, type: "maxMemory" | "minMemory" | "port
         </div>
         <div class="startup-pair-item">
           <span class="startup-row-label">{{ i18n.t("create.min_memory") }}</span>
-          <SLInput
+          <cmz-input
             type="text"
             :model-value="minMemory"
             @input="handleNumberInput($event, 'minMemory')"
@@ -62,7 +63,7 @@ function handleNumberInput(event: Event, type: "maxMemory" | "minMemory" | "port
       <div class="startup-pair-row">
         <div class="startup-pair-item">
           <span class="startup-row-label">{{ i18n.t("settings.default_port") }}</span>
-          <SLInput
+          <cmz-input
             type="text"
             :model-value="port"
             :placeholder="i18n.t('create.default_port_placeholder')"
@@ -76,7 +77,7 @@ function handleNumberInput(event: Event, type: "maxMemory" | "minMemory" | "port
             <span class="startup-online-text">
               {{ onlineMode ? i18n.t("create.online_mode_on") : i18n.t("create.online_mode_off") }}
             </span>
-            <SLSwitch
+            <cmz-switch
               :model-value="onlineMode"
               @update:model-value="$emit('update:onlineMode', $event)"
             />

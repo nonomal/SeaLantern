@@ -1,0 +1,946 @@
+<script setup lang="ts">
+import { ref, computed, onActivated, onDeactivated } from "vue";
+import { i18n } from "@language";
+import { ExternalLink, Menu, X, Download, ChevronRight } from "lucide-vue-next";
+import { Cmz_Accordion, Cmz_AccordionPanel } from "cmzya-modern-ui";
+import {
+  helpDocs,
+  introFeatures,
+  introTop,
+  introFooter,
+  downloadPlatforms,
+  serverTypes,
+  gettingStartedSteps,
+  featureItems,
+  pluginRecommendations,
+  memorySuggestions,
+  configItems,
+  faqCategories,
+  getTutorialSegments,
+  type TutorialSegment,
+} from "@data/helpDocs";
+import { useExternalLinks } from "@composables/useExternalLinks";
+
+// 文档页面配置
+const docPages = computed(() => [
+  { key: "intro", label: i18n.t("help.sections.intro") },
+  { key: "download", label: i18n.t("help.sections.download") },
+  { key: "getting-started", label: i18n.t("help.sections.getting_started") },
+  { key: "server-jar", label: i18n.t("help.sections.server_jar") },
+  { key: "tutorial", label: i18n.t("help.sections.tutorial") },
+  { key: "features", label: i18n.t("help.sections.features") },
+  { key: "faq", label: i18n.t("help.sections.faq") },
+  { key: "contributor", label: i18n.t("help.sections.contributor") },
+]);
+
+const currentSection = ref("intro");
+const sidebarOpen = ref(true);
+const isMobile = ref(false);
+
+// 外链统一处理：拦截 Markdown 中的绝对外链，改由系统浏览器打开
+const { openLink, handleLinkClick } = useExternalLinks();
+
+// 页面标记（需自定义渲染的页面）
+const pageType = computed<
+  | "intro"
+  | "download"
+  | "server-jar"
+  | "getting-started"
+  | "features"
+  | "tutorial"
+  | "faq"
+  | "other"
+>(() => {
+  const key = currentSection.value;
+  if (key === "intro") return "intro";
+  if (key === "download") return "download";
+  if (key === "server-jar") return "server-jar";
+  if (key === "getting-started") return "getting-started";
+  if (key === "features") return "features";
+  if (key === "tutorial") return "tutorial";
+  if (key === "faq") return "faq";
+  return "other";
+});
+
+// 其他页面直接从静态数据获取内容
+const contentMd = computed(() =>
+  pageType.value !== "other" ? "" : (helpDocs[currentSection.value] ?? ""),
+);
+
+// 使用教程的分段内容（MD + 卡片穿插）
+const tutorialSegments = computed<TutorialSegment[]>(() => getTutorialSegments());
+
+// FAQ 手风琴展开状态：FAQ 分类标题 → 打开的 panel ID 数组
+const faqOpenState = ref<Record<string, string[]>>({});
+
+function getFaqModel(categoryTitle: string): string[] {
+  return faqOpenState.value[categoryTitle] ?? [];
+}
+
+function updateFaqModel(categoryTitle: string, ids: string[]) {
+  faqOpenState.value[categoryTitle] = ids;
+}
+
+// 在系统浏览器中打开当前章节的在线文档
+function openInBrowser() {
+  void openLink(`https://docs.ideaflash.cn/zh/${currentSection.value}`);
+}
+
+// 检测移动端
+function checkMobile() {
+  isMobile.value = window.innerWidth < 768;
+  if (!isMobile.value) sidebarOpen.value = true;
+}
+
+// keep-alive 缓存时用 onActivated/onDeactivated 管理 resize 监听,切走即移除避免泄漏
+onActivated(() => {
+  checkMobile();
+  window.addEventListener("resize", checkMobile);
+});
+
+onDeactivated(() => {
+  window.removeEventListener("resize", checkMobile);
+});
+</script>
+
+<template>
+  <div class="help-view">
+    <!-- 移动端侧栏切换 -->
+    <button v-if="isMobile" class="sidebar-toggle" @click="sidebarOpen = !sidebarOpen">
+      <Menu v-if="!sidebarOpen" :size="20" />
+      <X v-else :size="20" />
+    </button>
+
+    <!-- 侧栏 TabBar 导航 -->
+    <aside class="help-sidebar" :class="{ open: sidebarOpen }">
+      <cmz-tab-bar
+        v-model="currentSection"
+        :tabs="docPages"
+        :level="1"
+        vertical
+        class="sidebar-nav"
+      />
+      <div class="sidebar-footer">
+        <cmz-button variant="outline" size="sm" class="open-browser-btn" @click="openInBrowser">
+          <ExternalLink :size="16" />
+          <span>{{ i18n.t("help.open_in_browser") }}</span>
+        </cmz-button>
+      </div>
+    </aside>
+
+    <!-- 内容区域 -->
+    <!-- :key=currentSection 强制切换章节时重建容器,触发 animate-stagger-in 交错动画 -->
+    <main :key="currentSection" class="help-content animate-stagger-in" @click="handleLinkClick">
+      <!-- 项目简介：顶部 + 特性卡片网格 + 底部 -->
+      <template v-if="pageType === 'intro'">
+        <cmz-markdown :content="introTop" variant="card" />
+        <h2 class="section-heading">{{ i18n.t("help.features_heading") }}</h2>
+        <div class="feature-grid">
+          <cmz-card
+            v-for="feature in introFeatures"
+            :key="feature.title"
+            padding="lg"
+            class="feature-card"
+          >
+            <h3 class="feature-title">{{ feature.title }}</h3>
+            <p class="feature-desc">{{ feature.desc }}</p>
+            <p class="feature-note">{{ feature.note }}</p>
+          </cmz-card>
+        </div>
+        <cmz-markdown :content="introFooter" variant="card" />
+      </template>
+
+      <!-- 下载安装：平台卡片 -->
+      <template v-else-if="pageType === 'download'">
+        <h1 class="page-title">{{ i18n.t("help.sections.download") }}</h1>
+        <p class="page-subtitle">{{ i18n.t("help.latest_version") }}<strong>v1.3.0</strong></p>
+        <div v-for="platform in downloadPlatforms" :key="platform.name" class="platform-section">
+          <h2 class="section-heading">{{ platform.name }}</h2>
+          <p class="platform-subtitle">{{ platform.subtitle }}</p>
+          <div class="download-grid">
+            <cmz-card
+              v-for="item in platform.items"
+              :key="item.format"
+              padding="none"
+              class="download-card"
+            >
+              <div class="download-card-body">
+                <h3 class="download-format">{{ item.format }}</h3>
+                <p class="download-desc">{{ item.desc }}</p>
+              </div>
+              <a :href="item.url" class="download-btn" target="_blank" rel="noreferrer">
+                <Download :size="16" />
+                <span>{{ i18n.t("help.download_btn") }}</span>
+              </a>
+            </cmz-card>
+          </div>
+          <p v-if="platform.notes" class="platform-notes">{{ platform.notes }}</p>
+        </div>
+        <cmz-markdown :content="helpDocs['download']" variant="card" />
+      </template>
+
+      <!-- 核心获取：服务端类型对比卡片 -->
+      <template v-else-if="pageType === 'server-jar'">
+        <h1 class="page-title">{{ i18n.t("help.sections.server_jar") }}</h1>
+        <p class="page-subtitle">{{ i18n.t("help.server_jar_subtitle") }}</p>
+        <div class="server-grid">
+          <cmz-card
+            v-for="server in serverTypes"
+            :key="server.name"
+            padding="lg"
+            class="server-card"
+          >
+            <div class="server-card-header">
+              <h2 class="server-name">{{ server.name }}</h2>
+              <div class="server-tags">
+                <span
+                  v-for="tag in server.tags"
+                  :key="tag"
+                  class="server-tag"
+                  :class="{ 'tag-recommend': tag === i18n.t('help.recommendation') }"
+                  >{{ tag }}</span
+                >
+              </div>
+            </div>
+            <p class="server-desc">{{ server.desc }}</p>
+            <div class="server-stars">
+              <span>{{ i18n.t("help.performance") }}</span>
+              <span class="stars"
+                >{{ "★".repeat(server.performance) }}{{ "☆".repeat(4 - server.performance) }}</span
+              >
+              <span>{{ i18n.t("help.recommendation") }}</span>
+              <span class="stars"
+                >{{ "★".repeat(server.recommendation)
+                }}{{ "☆".repeat(4 - server.recommendation) }}</span
+              >
+            </div>
+            <div class="server-compat">
+              <span class="compat-label">{{ i18n.t("help.plugins_label") }}</span>
+              <span>{{ server.pluginCompat }}</span>
+              <span class="compat-label">Mod</span>
+              <span>{{ server.modCompat }}</span>
+            </div>
+            <ul v-if="server.pros.length" class="server-pros">
+              <li v-for="pro in server.pros" :key="pro">{{ pro }}</li>
+            </ul>
+            <ul v-if="server.cons.length" class="server-cons">
+              <li v-for="con in server.cons" :key="con">{{ con }}</li>
+            </ul>
+            <a :href="server.url" class="server-link" target="_blank" rel="noreferrer">
+              <span>{{ i18n.t("help.go_download") }}</span>
+              <ChevronRight :size="14" />
+            </a>
+          </cmz-card>
+        </div>
+        <cmz-markdown :content="helpDocs['server-jar']" variant="card" />
+      </template>
+
+      <!-- 快速开始：步骤编号卡片 -->
+      <template v-else-if="pageType === 'getting-started'">
+        <h1 class="page-title">{{ i18n.t("help.sections.getting_started") }}</h1>
+        <div class="steps-container">
+          <cmz-card
+            v-for="step in gettingStartedSteps"
+            :key="step.number"
+            padding="lg"
+            class="step-card"
+          >
+            <div class="step-number">{{ step.number }}</div>
+            <div class="step-body">
+              <h2 class="step-title">{{ step.title }}</h2>
+              <p class="step-content">{{ step.content }}</p>
+              <p v-if="step.detail" class="step-detail">{{ step.detail }}</p>
+            </div>
+          </cmz-card>
+        </div>
+        <cmz-markdown :content="helpDocs['getting-started']" variant="card" />
+      </template>
+
+      <!-- 功能总览：特性卡片网格 -->
+      <template v-else-if="pageType === 'features'">
+        <h1 class="page-title">{{ i18n.t("help.sections.features") }}</h1>
+        <p class="page-subtitle">{{ i18n.t("help.features_subtitle") }}</p>
+        <div class="feature-grid">
+          <cmz-card
+            v-for="feature in featureItems"
+            :key="feature.title"
+            padding="lg"
+            class="feature-card"
+          >
+            <h3 class="feature-title">{{ feature.title }}</h3>
+            <p class="feature-desc">{{ feature.desc }}</p>
+          </cmz-card>
+        </div>
+      </template>
+
+      <!-- 使用教程：MD + 卡片穿插 -->
+      <template v-else-if="pageType === 'tutorial'">
+        <template v-for="(seg, idx) in tutorialSegments" :key="idx">
+          <!-- MD 段落 -->
+          <cmz-markdown v-if="seg.type === 'md'" :content="seg.content" variant="card" />
+          <!-- 配置项卡片 -->
+          <template v-else-if="seg.type === 'config-cards'">
+            <h2 class="section-heading" style="margin-top: var(--sl-space-lg)">
+              {{ i18n.t("help.common_configs") }}
+            </h2>
+            <div class="config-grid">
+              <cmz-card v-for="item in configItems" :key="item.key" padding="md" class="mini-card">
+                <code class="mini-card-key">{{ item.key }}</code>
+                <p class="mini-card-desc">{{ item.desc }}</p>
+                <span class="mini-card-default"
+                  >{{ i18n.t("help.default_label") }}<code>{{ item.default }}</code></span
+                >
+              </cmz-card>
+            </div>
+          </template>
+          <!-- 插件推荐卡片 -->
+          <template v-else-if="seg.type === 'plugin-cards'">
+            <h2 class="section-heading" style="margin-top: var(--sl-space-lg)">
+              {{ i18n.t("help.common_plugins") }}
+            </h2>
+            <p class="mini-card-note">{{ i18n.t("help.plugin_click_hint") }}</p>
+            <div class="plugin-grid">
+              <cmz-card
+                v-for="plugin in pluginRecommendations"
+                :key="plugin.name"
+                padding="md"
+                class="plugin-card"
+              >
+                <div class="plugin-card-header">
+                  <a :href="plugin.url" class="plugin-name" target="_blank" rel="noreferrer">{{
+                    plugin.name
+                  }}</a>
+                  <span class="plugin-category">{{ plugin.category }}</span>
+                </div>
+                <p class="plugin-desc">{{ plugin.desc }}</p>
+              </cmz-card>
+            </div>
+          </template>
+          <!-- 内存分配建议卡片 -->
+          <template v-else-if="seg.type === 'memory-cards'">
+            <h2 class="section-heading" style="margin-top: var(--sl-space-lg)">
+              {{ i18n.t("help.memory_suggestions") }}
+            </h2>
+            <div class="memory-grid">
+              <cmz-card
+                v-for="item in memorySuggestions"
+                :key="item.players"
+                padding="md"
+                class="memory-card"
+              >
+                <span class="memory-players">{{ item.players }}</span>
+                <span class="memory-value">{{ item.memory }}</span>
+                <span class="memory-desc">{{ item.desc }}</span>
+              </cmz-card>
+            </div>
+          </template>
+        </template>
+      </template>
+
+      <!-- 常见问题：Accordion 折叠面板 -->
+      <template v-else-if="pageType === 'faq'">
+        <h1 class="page-title">{{ i18n.t("help.sections.faq") }}</h1>
+        <div v-for="category in faqCategories" :key="category.title" class="faq-category">
+          <h2 class="section-heading">{{ category.title }}</h2>
+          <Cmz_Accordion
+            class="faq-accordion"
+            :modelValue="getFaqModel(category.title)"
+            @update:modelValue="(v: string[]) => updateFaqModel(category.title, v)"
+          >
+            <Cmz_AccordionPanel
+              v-for="item in category.items"
+              :key="item.question"
+              :id="item.question"
+              :title="item.question"
+            >
+              <cmz-markdown :content="item.answer" />
+            </Cmz_AccordionPanel>
+          </Cmz_Accordion>
+        </div>
+      </template>
+
+      <!-- 其他页面 -->
+      <cmz-markdown v-else :content="contentMd" variant="card" />
+    </main>
+  </div>
+</template>
+
+<style scoped>
+.help-view {
+  display: flex;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar-toggle {
+  position: fixed;
+  top: var(--sl-space-md);
+  left: var(--sl-space-md);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: var(--sl-bg-elevated);
+  border: 1px solid var(--sl-border);
+  border-radius: var(--sl-radius-md);
+  color: var(--sl-text);
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  background: var(--sl-bg-hover);
+}
+
+.help-sidebar {
+  width: 220px;
+  height: 100%;
+  background: var(--sl-bg-elevated);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  transition: transform 0.3s ease;
+}
+
+.sidebar-nav {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 !important;
+  border: none !important;
+}
+
+.sidebar-footer {
+  padding: var(--sl-space-sm);
+  border-top: 1px solid var(--sl-border);
+  flex-shrink: 0;
+}
+
+.open-browser-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sl-space-xs);
+}
+
+.help-content {
+  flex: 1;
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--sl-space-2xl) var(--sl-space-2xl);
+  scroll-behavior: smooth;
+}
+
+/* 通用标题 */
+.page-title {
+  font-size: var(--sl-font-size-3xl);
+  font-weight: 700;
+  color: var(--sl-text-primary);
+  margin: 0 0 var(--sl-space-xs);
+}
+
+.page-subtitle {
+  font-size: var(--sl-font-size-base);
+  color: var(--sl-text-secondary);
+  margin: 0 0 var(--sl-space-xl);
+  line-height: 1.6;
+}
+
+.section-heading {
+  font-size: var(--sl-font-size-2xl);
+  font-weight: 600;
+  color: var(--sl-text-primary);
+  margin: var(--sl-space-lg) 0 var(--sl-space-md);
+  padding-bottom: var(--sl-space-sm);
+  border-bottom: 1px solid var(--sl-border-light);
+}
+
+/* ========== 特性卡片 ========== */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sl-space-md);
+  margin-bottom: var(--sl-space-lg);
+}
+
+/* 卡片底色走组件库默认 surface,透明感由原生窗口材质提供 */
+.feature-card {
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.feature-card:hover {
+  border-color: var(--sl-primary);
+  box-shadow: 0 0 0 1px var(--sl-primary);
+}
+
+.feature-title {
+  font-size: var(--sl-font-size-lg);
+  font-weight: 600;
+  color: var(--sl-text-primary);
+  margin: 0 0 var(--sl-space-xs);
+}
+
+.feature-desc {
+  font-size: var(--sl-font-size-sm);
+  color: var(--sl-text-secondary);
+  line-height: 1.6;
+  margin: 0 0 var(--sl-space-xs);
+}
+
+.feature-note {
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-tertiary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ========== 下载卡片 ========== */
+.platform-section {
+  margin-bottom: var(--sl-space-xl);
+}
+
+.platform-subtitle {
+  font-size: var(--sl-font-size-sm);
+  color: var(--sl-text-tertiary);
+  margin: -var(--sl-space-sm) 0 var(--sl-space-md);
+}
+
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--sl-space-sm);
+}
+
+.download-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.download-card:hover {
+  border-color: var(--sl-primary);
+  box-shadow: 0 0 0 1px var(--sl-primary);
+}
+
+.download-card-body {
+  flex: 1;
+  padding: var(--sl-space-md) var(--sl-space-md) var(--sl-space-sm);
+}
+
+.download-format {
+  font-size: var(--sl-font-size-sm);
+  font-weight: 600;
+  color: var(--sl-text-primary);
+  margin: 0 0 2px;
+}
+
+.download-desc {
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-tertiary);
+  margin: 0;
+}
+
+.download-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px var(--sl-space-md);
+  margin: 0 var(--sl-space-md) var(--sl-space-md);
+  border-radius: var(--sl-radius-sm);
+  background: var(--sl-primary);
+  color: #fff;
+  font-size: var(--sl-font-size-sm);
+  font-weight: 500;
+  text-decoration: none;
+  transition: opacity 0.2s;
+}
+
+.download-btn:hover {
+  opacity: 0.9;
+}
+
+.platform-notes {
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-tertiary);
+  margin: var(--sl-space-sm) 0 0;
+  line-height: 1.5;
+}
+
+/* ========== 服务端类型对比卡片 ========== */
+.server-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--sl-space-md);
+  margin-bottom: var(--sl-space-lg);
+}
+
+.server-card {
+  display: flex;
+  flex-direction: column;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.server-card:hover {
+  border-color: var(--sl-primary);
+  box-shadow: 0 0 0 1px var(--sl-primary);
+}
+
+.server-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sl-space-xs);
+}
+
+.server-name {
+  font-size: var(--sl-font-size-lg);
+  font-weight: 600;
+  color: var(--sl-text-primary);
+  margin: 0;
+}
+
+.server-tags {
+  display: flex;
+  gap: 4px;
+}
+
+.server-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--sl-radius-full);
+  background: var(--sl-bg-tertiary);
+  color: var(--sl-text-tertiary);
+}
+
+.tag-recommend {
+  background: var(--sl-primary-bg);
+  color: var(--sl-primary);
+  font-weight: 500;
+}
+
+.server-desc {
+  font-size: var(--sl-font-size-sm);
+  color: var(--sl-text-secondary);
+  margin: 0 0 var(--sl-space-sm);
+  line-height: 1.5;
+}
+
+.server-stars {
+  display: flex;
+  align-items: center;
+  gap: var(--sl-space-xs);
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-tertiary);
+  margin-bottom: var(--sl-space-xs);
+}
+
+.stars {
+  color: var(--sl-warning);
+  letter-spacing: 1px;
+}
+
+.server-compat {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sl-space-sm);
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-secondary);
+  margin-bottom: var(--sl-space-sm);
+  padding: var(--sl-space-xs) var(--sl-space-sm);
+  background: var(--sl-bg-secondary);
+  border-radius: var(--sl-radius-sm);
+}
+
+.compat-label {
+  color: var(--sl-text-tertiary);
+  font-weight: 500;
+}
+
+.server-pros,
+.server-cons {
+  margin: 0 0 var(--sl-space-xs);
+  padding-left: var(--sl-space-lg);
+  font-size: var(--sl-font-size-xs);
+  line-height: 1.6;
+}
+
+.server-pros li {
+  color: var(--sl-success);
+}
+
+.server-cons li {
+  color: var(--sl-error);
+}
+
+.server-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: var(--sl-space-sm);
+  font-size: var(--sl-font-size-sm);
+  color: var(--sl-primary);
+  text-decoration: none;
+  font-weight: 500;
+  border-top: 1px solid var(--sl-border-light);
+}
+
+.server-link:hover {
+  opacity: 0.8;
+}
+
+/* ========== 步骤卡片 ========== */
+.steps-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-md);
+  margin-bottom: var(--sl-space-lg);
+}
+
+.step-card {
+  display: flex;
+  gap: var(--sl-space-md);
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.step-card:hover {
+  border-color: var(--sl-primary);
+  box-shadow: 0 0 0 1px var(--sl-primary);
+}
+
+.step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--sl-primary);
+  color: #fff;
+  font-size: var(--sl-font-size-base);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ========== FAQ Accordion ========== */
+.faq-category {
+  margin-bottom: var(--sl-space-lg);
+}
+
+.faq-accordion {
+  margin-bottom: var(--sl-space-md);
+}
+
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-title {
+  font-size: var(--sl-font-size-lg);
+  font-weight: 600;
+  color: var(--sl-text-primary);
+  margin: 0 0 4px;
+}
+
+.step-content {
+  font-size: var(--sl-font-size-sm);
+  color: var(--sl-text-secondary);
+  margin: 0 0 2px;
+  line-height: 1.5;
+}
+
+.step-detail {
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-tertiary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .help-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100%;
+    z-index: 50;
+    transform: translateX(-100%);
+    box-shadow: var(--sl-shadow-lg);
+  }
+
+  .help-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .help-content {
+    padding: var(--sl-space-lg);
+    padding-top: calc(48px + var(--sl-space-lg));
+  }
+}
+
+/* ========== 配置项小卡片 ========== */
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sl-space-sm);
+  margin-bottom: var(--sl-space-lg);
+}
+
+.mini-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.mini-card:hover {
+  border-color: var(--sl-primary);
+  box-shadow: 0 0 0 1px var(--sl-primary);
+}
+
+.mini-card-key {
+  font-size: var(--sl-font-size-sm);
+  font-weight: 600;
+  color: var(--sl-primary);
+  background: var(--sl-primary-bg);
+  padding: 1px 6px;
+  border-radius: var(--sl-radius-sm);
+  align-self: flex-start;
+}
+
+.mini-card-desc {
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.mini-card-default {
+  font-size: 11px;
+  color: var(--sl-text-tertiary);
+}
+
+.mini-card-default code {
+  font-size: 11px;
+  background: var(--sl-bg-secondary);
+  padding: 0 4px;
+  border-radius: 2px;
+}
+
+.mini-card-note {
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-tertiary);
+  margin: -var(--sl-space-sm) 0 var(--sl-space-md);
+}
+
+/* ========== 插件推荐卡片 ========== */
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--sl-space-sm);
+  margin-bottom: var(--sl-space-lg);
+}
+
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.plugin-card:hover {
+  border-color: var(--sl-primary);
+  box-shadow: 0 0 0 1px var(--sl-primary);
+}
+
+.plugin-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sl-space-xs);
+}
+
+.plugin-name {
+  font-size: var(--sl-font-size-sm);
+  font-weight: 600;
+  color: var(--sl-primary);
+  text-decoration: none;
+}
+
+.plugin-name:hover {
+  text-decoration: underline;
+}
+
+.plugin-category {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--sl-radius-full);
+  background: var(--sl-bg-tertiary);
+  color: var(--sl-text-tertiary);
+  flex-shrink: 0;
+}
+
+.plugin-desc {
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ========== 内存分配建议卡片 ========== */
+.memory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--sl-space-sm);
+  margin-bottom: var(--sl-space-lg);
+}
+
+.memory-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.memory-card:hover {
+  border-color: var(--sl-primary);
+  box-shadow: 0 0 0 1px var(--sl-primary);
+}
+
+.memory-players {
+  font-size: var(--sl-font-size-xs);
+  color: var(--sl-text-tertiary);
+}
+
+.memory-value {
+  font-size: var(--sl-font-size-xl);
+  font-weight: 700;
+  color: var(--sl-primary);
+}
+
+.memory-desc {
+  font-size: 11px;
+  color: var(--sl-text-tertiary);
+  line-height: 1.4;
+}
+</style>

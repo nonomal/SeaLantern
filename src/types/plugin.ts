@@ -169,6 +169,9 @@ export type PluginUiAction =
   | "set_style"
   | "set_attribute"
   | "query"
+  | "element_exists"
+  | "element_is_visible"
+  | "element_is_enabled"
   | "element_get_text"
   | "element_get_value"
   | "element_get_attribute"
@@ -180,16 +183,25 @@ export type PluginUiAction =
   | "element_focus"
   | "element_blur"
   | "element_on_change"
+  | "element_off_change"
+  | "element_form_fill"
   | "inject_css"
   | "remove_css"
   | "toast";
 
 export interface PluginPermissionLog {
   plugin_id: string;
-  log_type: "command" | "api_call";
+  log_type: string;
   action: string;
   detail: string;
   timestamp: number;
+}
+
+export interface PluginPermissionLogGroup {
+  name: string;
+  count: number;
+  lastTimestamp: number;
+  details: string[];
 }
 
 export interface PluginLogEvent {
@@ -367,4 +379,21 @@ export function getLocalizedPluginName(manifest: PluginManifest, locale: string)
 
 export function getLocalizedPluginDescription(manifest: PluginManifest, locale: string): string {
   return manifest.locales?.[locale]?.description ?? manifest.description;
+}
+
+/**
+ * 根据插件配置字段类型返回默认值
+ * 用于 manifest 未声明 default 时的兜底
+ */
+export function getPluginSettingDefaultValue(type: PluginSettingField["type"]): unknown {
+  switch (type) {
+    case "number":
+      return 0;
+    case "boolean":
+    case "checkbox":
+      return false;
+    default:
+      // string/textarea/select/color 统一兜底空字符串
+      return "";
+  }
 }

@@ -1,7 +1,6 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { Pencil, FolderOpen, Check, X } from "lucide-vue-next";
-import SLCard from "@components/common/SLCard.vue";
-import SLButton from "@components/common/SLButton.vue";
 import type { ServerInstance } from "@type/server";
 import { i18n } from "@language";
 import { systemApi } from "@api/system";
@@ -12,6 +11,7 @@ import {
   editName,
   editLoading,
   formatServerPath,
+  formatMemoryMB,
   getStatusText,
   handleStart,
   handleStop,
@@ -19,6 +19,7 @@ import {
   saveServerName,
   cancelEdit,
   showDeleteConfirmInput,
+  showChangePathModal,
 } from "@utils/serverUtils";
 import { useServerStore } from "@stores/serverStore";
 
@@ -28,6 +29,12 @@ const props = defineProps<{
 
 const store = useServerStore();
 const router = useRouter();
+
+// 把 store.statuses[server.id]?.status 集中到一个 computed
+// 避免模板中 6+ 次响应式读取
+const status = computed<string | undefined>(() => store.statuses[props.server.id]?.status);
+const actionLoadingForServer = computed(() => actionLoading.value[props.server.id] === true);
+const isEditing = computed(() => editingServerId.value === props.server.id);
 
 async function handlePathClick(path: string) {
   try {
@@ -47,29 +54,34 @@ function handleConfig() {
   router.push("/config/" + props.server.id);
 }
 
-function getStatusClass(status: string | undefined): string {
-  return status === "Running"
+function handleStartupConfig() {
+  store.setCurrentServer(props.server.id);
+  router.push({ path: "/config/" + props.server.id, query: { tab: "startup" } });
+}
+
+function getStatusClass(s: string | undefined): string {
+  return s === "Running"
     ? "running"
-    : status === "Starting"
+    : s === "Starting"
       ? "starting"
-      : status === "Stopping"
+      : s === "Stopping"
         ? "stopping"
         : "stopped";
 }
 </script>
 
 <template>
-  <SLCard variant="glass" hoverable class="server-card">
+  <cmz-card class="server-card" :data-server-id="server.id">
     <div class="status-badge-container">
-      <div class="status-indicator" :class="getStatusClass(store.statuses[server.id]?.status)">
+      <div class="status-indicator" :class="getStatusClass(status)">
         <span class="status-dot"></span>
-        <span class="status-label">{{ getStatusText(store.statuses[server.id]?.status) }}</span>
+        <span class="status-label">{{ getStatusText(status) }}</span>
       </div>
     </div>
 
     <div class="server-card-header">
       <div class="server-name-container">
-        <template v-if="editingServerId === server.id">
+        <template v-if="isEditing">
           <div class="inline-edit">
             <input
               type="text"
@@ -108,7 +120,9 @@ function getStatusClass(status: string | undefined): string {
       <div class="server-meta">
         <span class="meta-tag core-type">{{ server.core_type }}</span>
         <span class="meta-tag">{{ i18n.t("home.port") }} {{ server.port }}</span>
-        <span class="meta-tag">{{ server.max_memory }}MB</span>
+        <span class="meta-tag clickable" @click="handleStartupConfig">{{
+          formatMemoryMB(server.max_memory)
+        }}</span>
       </div>
     </div>
 
@@ -125,42 +139,41 @@ function getStatusClass(status: string | undefined): string {
 
     <div class="server-card-actions">
       <div class="action-group primary-actions">
-        <SLButton
-          v-if="
-            store.statuses[server.id]?.status === 'Stopped' ||
-            store.statuses[server.id]?.status === 'Error' ||
-            !store.statuses[server.id]?.status
-          "
-          variant="primary"
+        <cmz-button
+          v-if="status === 'Stopped' || status === 'Error' || !status"
           size="sm"
-          :loading="actionLoading[server.id]"
-          :disabled="actionLoading[server.id] || store.statuses[server.id]?.status === 'Stopping'"
+          :loading="actionLoadingForServer"
+          :disabled="actionLoadingForServer || status === 'Stopping'"
           @click="handleStart(server.id)"
-          >{{ i18n.t("home.start") }}</SLButton
+          >{{ i18n.t("home.start") }}</cmz-button
         >
-        <SLButton
+        <cmz-button
           v-else
-          variant="danger"
+          variant="solid"
+          color="#ef4444"
           size="sm"
-          :loading="actionLoading[server.id]"
-          :disabled="actionLoading[server.id] || store.statuses[server.id]?.status === 'Stopping'"
+          :loading="actionLoadingForServer"
+          :disabled="actionLoadingForServer || status === 'Stopping'"
           @click="handleStop(server.id)"
-          >{{ i18n.t("home.stop") }}</SLButton
+          >{{ i18n.t("home.stop") }}</cmz-button
         >
       </div>
       <div class="action-group secondary-actions">
-        <SLButton variant="ghost" size="sm" @click="handleConsole">
+        <cmz-button variant="ghost" size="sm" @click="handleConsole">
           {{ i18n.t("common.console") }}
-        </SLButton>
-        <SLButton variant="ghost" size="sm" @click="handleConfig">
+        </cmz-button>
+        <cmz-button variant="ghost" size="sm" @click="handleConfig">
           {{ i18n.t("common.config_edit") }}
-        </SLButton>
-        <SLButton variant="ghost" size="sm" @click="showDeleteConfirmInput(server)">
+        </cmz-button>
+        <cmz-button variant="ghost" size="sm" @click="showChangePathModal(server)">
+          {{ i18n.t("home.change_path") }}
+        </cmz-button>
+        <cmz-button variant="ghost" size="sm" @click="showDeleteConfirmInput(server)">
           {{ i18n.t("home.delete") }}
-        </SLButton>
+        </cmz-button>
       </div>
     </div>
-  </SLCard>
+  </cmz-card>
 </template>
 
 <style scoped>
@@ -170,6 +183,20 @@ function getStatusClass(status: string | undefined): string {
   position: relative;
   height: 100%;
   min-height: 200px;
+  cursor: pointer;
+  /* 所有交互过渡统一节奏,避免各部件各动各的 */
+  transition:
+    transform var(--sl-transition-normal),
+    box-shadow var(--sl-transition-normal),
+    border-color var(--sl-transition-normal),
+    background-color var(--sl-transition-normal);
+}
+
+/* 整体卡片 hover:克制上浮 + 阴影加强 + 边框高亮,不搞花里胡哨的渐变条 */
+.server-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--sl-shadow-elevated);
+  border-color: var(--sl-primary-light);
 }
 
 .status-badge-container {
@@ -222,37 +249,20 @@ function getStatusClass(status: string | undefined): string {
 .status-indicator.starting .status-dot,
 .status-indicator.stopping .status-dot {
   background: var(--sl-warning);
-  animation: pulse 2s infinite;
+  animation: statusPulse 2s ease-in-out infinite;
+  /* 频繁动画元素提升到独立图层,减少重绘开销 */
+  will-change: transform, opacity;
 }
 
-@keyframes pulse {
+/* 状态呼吸灯:用透明度变化代替缩放,避免脉冲浮动感 */
+@keyframes statusPulse {
   0%,
   100% {
     opacity: 1;
-    transform: scale(1);
   }
   50% {
-    opacity: 0.5;
-    transform: scale(1.2);
+    opacity: 0.45;
   }
-}
-
-.server-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: linear-gradient(90deg, var(--sl-primary), var(--sl-secondary));
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 0.3s ease;
-  z-index: 1;
-}
-
-.server-card:hover::before {
-  transform: scaleX(1);
 }
 
 .server-card-header {
@@ -284,7 +294,7 @@ function getStatusClass(status: string | undefined): string {
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: var(--sl-transition-normal);
   padding: 4px;
   border-radius: var(--sl-radius-sm);
   flex-shrink: 0;
@@ -318,7 +328,7 @@ function getStatusClass(status: string | undefined): string {
   font-size: 1rem;
   font-weight: 600;
   outline: none;
-  transition: all 0.2s ease;
+  transition: var(--sl-transition-normal);
 }
 
 .server-name-input:focus {
@@ -340,7 +350,7 @@ function getStatusClass(status: string | undefined): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s ease;
+  transition: var(--sl-transition-normal);
 }
 
 .inline-edit-btn.save {
@@ -385,7 +395,14 @@ function getStatusClass(status: string | undefined): string {
   border-radius: var(--sl-radius-full);
   white-space: nowrap;
   border: 1px solid var(--sl-border);
-  transition: all 0.2s ease;
+  transition: var(--sl-transition-normal);
+}
+
+/* 带点击事件的 meta-tag(如内存配置入口)给个指针提示 */
+.meta-tag[onclick],
+.meta-tag[style*="cursor"],
+.meta-tag.clickable {
+  cursor: pointer;
 }
 
 .meta-tag:hover {
@@ -400,9 +417,10 @@ function getStatusClass(status: string | undefined): string {
   font-weight: 500;
 }
 
+/* core-type hover 保持克制,不突然跳成全主色实心块 */
 .meta-tag.core-type:hover {
-  background: var(--sl-primary);
-  color: white;
+  background: color-mix(in srgb, var(--sl-primary-bg) 65%, var(--sl-primary) 35%);
+  border-color: var(--sl-primary);
 }
 
 .server-card-content {
@@ -424,7 +442,7 @@ function getStatusClass(status: string | undefined): string {
   padding: 8px var(--sl-space-sm);
   border-radius: var(--sl-radius-md);
   border: 1px solid var(--sl-border);
-  transition: all 0.2s ease;
+  transition: var(--sl-transition-normal);
   cursor: pointer;
   user-select: none;
 }
@@ -440,7 +458,7 @@ function getStatusClass(status: string | undefined): string {
 .folder-icon {
   flex-shrink: 0;
   opacity: 0.6;
-  transition: opacity 0.2s ease;
+  transition: var(--sl-transition-normal);
   color: var(--sl-text-secondary);
 }
 
@@ -471,19 +489,20 @@ function getStatusClass(status: string | undefined): string {
   align-items: center;
 }
 
-.primary-actions :deep(.sl-button) {
+.primary-actions :deep(.cmz-button),
+.secondary-actions :deep(.cmz-button) {
+  border-radius: var(--sl-radius-md);
+  /* 按钮不再自己上浮,避免和卡片上浮叠加造成分层感 */
+  transition:
+    color var(--sl-transition-normal),
+    background-color var(--sl-transition-normal),
+    border-color var(--sl-transition-normal),
+    box-shadow var(--sl-transition-normal),
+    opacity var(--sl-transition-normal);
+}
+
+.primary-actions :deep(.cmz-button) {
   min-width: 72px;
-  border-radius: var(--sl-radius-md);
-  transition: all 0.2s ease;
-}
-
-.secondary-actions :deep(.sl-button) {
-  border-radius: var(--sl-radius-md);
-  transition: all 0.2s ease;
-}
-
-.server-card-actions :deep(.sl-button:hover) {
-  transform: translateY(-1px);
 }
 
 @media (max-width: 640px) {
@@ -515,7 +534,7 @@ function getStatusClass(status: string | undefined): string {
     justify-content: center;
   }
 
-  .action-group :deep(.sl-button) {
+  .action-group :deep(.cmz-button) {
     flex: 1;
   }
 }

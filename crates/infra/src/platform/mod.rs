@@ -1,0 +1,30 @@
+//! 跨平台的系统级基础设施。
+//!
+//! 此模块只封装可移植的系统交互基础组件。应用策略、配置持久化和 UI 授权流程
+//! 由上层负责；尤其是 CA 证书仅供 HTTP 客户端使用，不会修改操作系统信任库。
+
+mod certificate;
+mod clipboard;
+mod elevation;
+mod environment;
+mod error;
+mod fonts;
+mod locations;
+mod proxy;
+mod system;
+
+pub use certificate::{
+    CaCertificateBundle, load_ca_certificate_bundle, parse_ca_certificate_bundle,
+};
+pub use clipboard::copy_text;
+pub use elevation::{ElevationLaunch, is_elevated, request_elevation};
+pub use environment::{Environment, EnvironmentError};
+pub use error::PlatformError;
+pub use fonts::collect_system_fonts;
+pub use locations::{get_app_data_dir, get_default_run_path, get_or_create_app_data_dir};
+pub use proxy::{PlatformSystemProxyProvider, SystemProxyReadError, current_system_proxy};
+pub use system::{
+    DiskUsage, NetworkUsage, ProcessUsage, ResourceSnapshot, SystemInfo, collect_cpu_info,
+    collect_disks, collect_networks, collect_process_usage, collect_resource_snapshot,
+    collect_system_info, cpu_brand_name, directory_size, path_disk_capacity, process_count,
+};

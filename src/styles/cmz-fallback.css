@@ -1,0 +1,173 @@
+/**
+ * CmzYa 组件项目侧适配层 (cmzya-modern-ui 0.7.0+)
+ * 只保留三类规则:
+ * 1. Tauri 透明窗口材质适配 — WebView2 下 backdrop-filter 磨不到窗外,
+ *    半透明配方会留下深色残留,浮层统一用 surface 实底
+ * 2. 毛玻璃模式对比度增强
+ * 3. 项目自有布局类 (settings-entry)
+ * 组件常规视觉一律交给组件库本体 + cmz-bridge 变量映射
+ */
+
+/* === Modal 材质适配 === */
+/* 遮罩用纯色加深,关掉库的全局模糊 */
+:root .cmz-modal-overlay.cmz-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sl-overlay);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 模态框外壳用卡片同款 surface 实底,透明窗口下保证玻璃质感不露黑 */
+:root .cmz-modal.cmz-modal {
+  position: relative;
+  z-index: 900;
+  background: var(--sl-surface, #fff);
+  backdrop-filter: blur(24px) saturate(var(--cmz-saturate-normal, 180%));
+  -webkit-backdrop-filter: blur(24px) saturate(var(--cmz-saturate-normal, 180%));
+  border-radius: var(--sl-radius-lg, 12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+}
+
+/* === Select 下拉浮层材质 === */
+/* 组件库下拉浮层 Teleport 到 body,定位由 JS 内联控制,这里只管视觉 */
+.cmz-select-dropdown {
+  border: 1px solid var(--sl-border);
+  border-radius: var(--sl-radius-md);
+  background: var(--sl-surface);
+  box-shadow: var(--sl-shadow-md);
+  overflow: hidden;
+}
+
+/* 高级材质浮层:近实色底 + 阴影区分层级,避免半透明透出底下内容
+   (透明窗口 WebView2 下 blur 不渲染,玻璃配方只会留下半透明残留) */
+[data-acrylic="on"] .cmz-select-dropdown {
+  background: var(--sl-acrylic-bg-strong);
+  border-color: var(--sl-acrylic-border);
+  box-shadow: var(--sl-shadow-elevated);
+}
+
+/* 关闭丙烯酸时退回实底 */
+[data-acrylic="off"] .cmz-select-dropdown {
+  background: var(--sl-surface);
+}
+
+/* === Toast === */
+/* 磨砂交给库本体:半透明 --cmz-acrylic-bg + backdrop-filter,data-acrylic=off 时库自动降级纯色。
+   0.6.2 时代的 surface 实底覆盖已删,不透明底色会盖死磨砂效果 */
+:root .cmz-toast {
+  backdrop-filter: blur(var(--cmz-acrylic-blur, 16px)) saturate(var(--cmz-acrylic-saturate, 180%));
+  -webkit-backdrop-filter: blur(var(--cmz-acrylic-blur, 16px))
+    saturate(var(--cmz-acrylic-saturate, 180%));
+}
+
+/* 顶部 toast 下移到标题栏之下:默认 top:16px 会盖住右上角窗口控件(最小化/最大化/关闭)
+   标题栏 48px,额外留 4px 安全间距。:root body 提特异性盖过库 scoped 定位 */
+:root body .cmz-toast-container--top-right,
+:root body .cmz-toast-container--top-left,
+:root body .cmz-toast-container--top-center {
+  top: calc(var(--cmz-toast-offset, 16px) + var(--sl-header-height, 48px) + 4px);
+}
+
+/* === 毛玻璃模式对比度增强 === */
+/* 开关在关闭状态下灰色轨道被毛玻璃削弱,提升可见性 */
+[data-acrylic="on"] .cmz-toggle__switch-track {
+  background: var(--sl-bg-tertiary) !important;
+  border: 1px solid var(--sl-border) !important;
+}
+
+[data-acrylic="on"] .cmz-toggle--checked .cmz-toggle__switch-track {
+  background: var(--sl-primary) !important;
+  border-color: var(--sl-primary) !important;
+}
+
+/* 输入框背景在毛玻璃下保持不透明 */
+[data-acrylic="on"] .cmz-input-container,
+[data-acrylic="on"] .cmz-textarea {
+  background: var(--sl-surface);
+}
+
+/* 高级材质下触发器用纯色底,与输入框一致不依赖 backdrop-filter
+   (透明窗口 WebView2 下 blur 不渲染,玻璃配方只会留下半透明残留) */
+[data-acrylic="on"] .cmz-select-trigger {
+  background: var(--sl-surface);
+  border-color: var(--sl-border);
+}
+
+/* 关闭材质时触发器退回实底 */
+[data-acrylic="off"] .cmz-select-trigger {
+  background: var(--sl-surface);
+}
+
+/* 毛玻璃下禁用开关提升可见性(默认 opacity 叠毛玻璃几乎看不清) */
+[data-acrylic="on"] .cmz-toggle--disabled {
+  opacity: 1;
+}
+
+/* === 设置页面行布局 — 项目自有类,与配置项风格一致 === */
+.settings-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sl-space-md);
+  padding: var(--sl-space-sm) 0;
+  border-bottom: 1px solid var(--sl-border-light);
+}
+
+.settings-entry:last-of-type {
+  border-bottom: none;
+}
+
+.settings-entry-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-entry-title {
+  display: block;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--sl-text-primary);
+}
+
+.settings-entry-desc {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--sl-text-tertiary);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+/* 设置页内的 select 统一宽度,防止标题文字被挤压,右对齐 */
+.settings-entry .cmz-select {
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* 0.7.0 起 Switch/Checkbox 薄包装统一渲染 .cmz-toggle 结构 */
+.settings-entry .cmz-toggle {
+  flex-shrink: 0;
+}
+
+.settings-entry .sl-input-sm,
+.settings-entry .sl-input-md,
+.settings-entry .sl-input-lg {
+  flex-shrink: 0;
+}
+
+.settings-entry .sl-slider-control {
+  flex-shrink: 0;
+  min-width: 240px;
+  max-width: 320px;
+}

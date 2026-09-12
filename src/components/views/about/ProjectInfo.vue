@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { RefreshCw, Check, XCircle } from "lucide-vue-next";
-import SLCard from "@components/common/SLCard.vue";
-import SLButton from "@components/common/SLButton.vue";
 import { checkUpdate, type UpdateInfo } from "@api/update";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { BUILD_YEAR } from "@utils/version";
 import { i18n } from "@language";
+import { useAboutLinks } from "@composables/useAboutLinks";
+
+const { openLink } = useAboutLinks();
 
 const props = defineProps<{
   version: string;
@@ -56,7 +57,7 @@ async function handleManualDownload() {
 </script>
 
 <template>
-  <SLCard :title="i18n.t('about.project_info')">
+  <cmz-card :title="i18n.t('about.project_info')">
     <div class="info-list">
       <div class="info-item">
         <span class="info-label">{{ i18n.t("about.version") }}</span>
@@ -78,18 +79,24 @@ async function handleManualDownload() {
         <span class="info-label">{{ i18n.t("about.license") }}</span>
         <span class="info-value">GNU GPLv3</span>
       </div>
+      <div class="info-item">
+        <span class="info-label">{{ i18n.t("about.docs") }}</span>
+        <span class="info-value link" @click="openLink('https://docs.ideaflash.cn/zh/intro')">{{
+          i18n.t("about.docs_link")
+        }}</span>
+      </div>
     </div>
 
     <div class="update-section">
-      <SLButton
-        variant="secondary"
+      <cmz-button
+        variant="outline"
         size="sm"
         @click="handleCheckUpdate"
         :disabled="isCheckingUpdate"
         style="width: 100%"
       >
         {{ isCheckingUpdate ? i18n.t("about.update_checking") : i18n.t("about.check_update") }}
-      </SLButton>
+      </cmz-button>
 
       <div v-if="updateInfo" class="update-info">
         <div v-if="updateInfo.has_update" class="update-available">
@@ -111,9 +118,9 @@ async function handleManualDownload() {
             <div class="notes-content">{{ updateInfo.release_notes }}</div>
           </div>
           <div class="update-buttons">
-            <SLButton variant="primary" size="sm" @click="handleManualDownload" style="width: 100%">
+            <cmz-button variant="solid" size="sm" @click="handleManualDownload" style="width: 100%">
               {{ i18n.t("about.go_download") }}
-            </SLButton>
+            </cmz-button>
           </div>
         </div>
         <div v-else class="update-latest">
@@ -131,7 +138,7 @@ async function handleManualDownload() {
         <span>{{ updateError }}</span>
       </div>
     </div>
-  </SLCard>
+  </cmz-card>
 </template>
 
 <style scoped>
@@ -163,6 +170,11 @@ async function handleManualDownload() {
   font-weight: 500;
   color: var(--sl-text-primary);
   font-family: var(--sl-font-mono);
+}
+
+.link {
+  color: var(--sl-primary);
+  cursor: pointer;
 }
 
 .update-section {

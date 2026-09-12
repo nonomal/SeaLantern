@@ -1,25 +1,15 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from "vue";
-import { useRoute } from "vue-router";
-import SLCard from "@components/common/SLCard.vue";
-import SLButton from "@components/common/SLButton.vue";
-import SLFormField from "@components/common/SLFormField.vue";
-import SLInput from "@components/common/SLInput.vue";
-import SLSwitch from "@components/common/SLSwitch.vue";
-import SLSelect from "@components/common/SLSelect.vue";
-import SLTextarea from "@components/common/SLTextarea.vue";
-import SLCheckbox from "@components/common/SLCheckbox.vue";
 import { usePluginStore } from "@stores/pluginStore";
 import { i18n } from "@language";
-import type { PluginInfo, PluginSettingField } from "@type/plugin";
-import { getLocalizedPluginName, getLocalizedPluginDescription } from "@type/plugin";
+import type { PluginInfo } from "@type/plugin";
+import { getLocalizedPluginDescription, getPluginSettingDefaultValue } from "@type/plugin";
 import { Palette, Puzzle } from "lucide-vue-next";
 
 const props = defineProps<{
   pluginId: string;
 }>();
 
-const route = useRoute();
 const pluginStore = usePluginStore();
 
 const plugin = ref<PluginInfo | null>(null);
@@ -58,7 +48,7 @@ async function loadPluginData() {
     if (found.manifest.settings) {
       for (const field of found.manifest.settings) {
         if (settingsForm[field.key] === undefined) {
-          settingsForm[field.key] = field.default ?? getDefaultValue(field.type);
+          settingsForm[field.key] = field.default ?? getPluginSettingDefaultValue(field.type);
         }
       }
     }
@@ -91,7 +81,7 @@ async function loadDependentPlugins() {
       const form: Record<string, any> = { ...depSettings };
       for (const field of p.manifest.settings!) {
         if (form[field.key] === undefined) {
-          form[field.key] = field.default ?? getDefaultValue(field.type);
+          form[field.key] = field.default ?? getPluginSettingDefaultValue(field.type);
         }
       }
       return { plugin: p, form };
@@ -101,25 +91,6 @@ async function loadDependentPlugins() {
   dependentPlugins.value = results.map((r) => r.plugin);
   for (const { plugin: depPlugin, form } of results) {
     dependentSettingsForms[depPlugin.manifest.id] = form;
-  }
-}
-
-function getDefaultValue(type: string): any {
-  switch (type) {
-    case "string":
-      return "";
-    case "textarea":
-      return "";
-    case "number":
-      return 0;
-    case "boolean":
-      return false;
-    case "checkbox":
-      return false;
-    case "select":
-      return "";
-    default:
-      return "";
   }
 }
 
@@ -153,34 +124,10 @@ async function applyPreset(presetKey: string) {
   await pluginStore.applyThemeProviderSettings(pluginId);
 }
 
-async function saveSettings() {
-  if (!plugin.value) return;
-  saving.value = true;
-  try {
-    await pluginStore.setPluginSettings(props.pluginId, { ...settingsForm });
-    if (isThemeProvider.value) {
-      await pluginStore.applyThemeProviderSettings(props.pluginId);
-    }
-
-    const depPromises = dependentPlugins.value.map(async (depPlugin) => {
-      const depForm = dependentSettingsForms[depPlugin.manifest.id];
-      if (depForm) {
-        await pluginStore.setPluginSettings(depPlugin.manifest.id, { ...depForm });
-        if (pluginStore.hasCapability(depPlugin.manifest.id, "theme-widgets-provider")) {
-          await pluginStore.applyThemeWidgetsProviderSettings(depPlugin.manifest.id);
-        }
-      }
-    });
-    await Promise.all(depPromises);
-  } finally {
-    saving.value = false;
-  }
-}
-
 async function resetToDefault() {
   if (!plugin.value?.manifest.settings) return;
   for (const field of plugin.value.manifest.settings) {
-    settingsForm[field.key] = field.default ?? getDefaultValue(field.type);
+    settingsForm[field.key] = field.default ?? getPluginSettingDefaultValue(field.type);
   }
 }
 
@@ -227,7 +174,7 @@ watch(
 <template>
   <div class="category-view">
     <div v-if="loading" class="loading-state">
-      <div class="loading-spinner"></div>
+      <cmz-spinner size="sm" />
       <span>{{ i18n.t("common.loading") }}</span>
     </div>
 
@@ -249,7 +196,7 @@ watch(
         </div>
       </header>
 
-      <SLCard v-if="isThemeProvider && pluginPresets" class="settings-card">
+      <cmz-card v-if="isThemeProvider && pluginPresets" class="settings-card">
         <h3 class="section-title">{{ i18n.t("plugins.preset_theme") }}</h3>
         <div class="presets-grid">
           <button
@@ -272,19 +219,19 @@ watch(
             <span class="preset-name">{{ (presetData as any).name ?? presetKey }}</span>
           </button>
         </div>
-      </SLCard>
+      </cmz-card>
 
-      <SLCard v-if="plugin.manifest.settings?.length" class="settings-card main-settings">
+      <cmz-card v-if="plugin.manifest.settings?.length" class="settings-card main-settings">
         <h3 class="section-title">{{ plugin.manifest.name }} {{ i18n.t("plugins.settings") }}</h3>
         <div class="settings-form">
-          <SLFormField
+          <cmz-form-field
             v-for="field in plugin.manifest.settings"
             :key="field.key"
             :label="field.label"
             :hint="field.description"
           >
             <template v-if="field.type === 'string'">
-              <SLInput v-model="settingsForm[field.key]" />
+              <cmz-input v-model="settingsForm[field.key]" />
             </template>
             <template v-else-if="field.type === 'color'">
               <div class="color-row-inline">
@@ -293,24 +240,24 @@ watch(
               </div>
             </template>
             <template v-else-if="field.type === 'textarea'">
-              <SLTextarea
+              <cmz-textarea
                 v-model="settingsForm[field.key]"
                 :rows="field.rows"
                 :maxlength="field.maxlength"
               />
             </template>
             <template v-else-if="field.type === 'number'">
-              <SLInput
+              <cmz-input
                 type="number"
                 :model-value="String(settingsForm[field.key])"
                 @update:model-value="settingsForm[field.key] = Number($event)"
               />
             </template>
             <template v-else-if="field.type === 'boolean'">
-              <SLSwitch v-model="settingsForm[field.key]" />
+              <cmz-switch v-model="settingsForm[field.key]" />
             </template>
             <template v-else-if="field.type === 'checkbox'">
-              <SLCheckbox v-model="settingsForm[field.key]" />
+              <cmz-checkbox v-model="settingsForm[field.key]" />
             </template>
             <template v-else-if="field.type === 'select' && field.display === 'button-group'">
               <div class="btn-group">
@@ -326,11 +273,11 @@ watch(
               </div>
             </template>
             <template v-else-if="field.type === 'select'">
-              <SLSelect v-model="settingsForm[field.key]" :options="field.options || []" />
+              <cmz-select v-model="settingsForm[field.key]" :options="field.options || []" />
             </template>
-          </SLFormField>
+          </cmz-form-field>
         </div>
-      </SLCard>
+      </cmz-card>
 
       <template v-if="showDependents && dependentPlugins.length > 0">
         <div class="dependent-section-header">
@@ -338,7 +285,7 @@ watch(
           <p>{{ i18n.t("plugins.related_plugins_desc", { name: plugin.manifest.name }) }}</p>
         </div>
 
-        <SLCard
+        <cmz-card
           v-for="depPlugin in dependentPlugins"
           :key="depPlugin.manifest.id"
           class="settings-card dependent-settings"
@@ -357,14 +304,14 @@ watch(
             </div>
           </div>
           <div class="settings-form">
-            <SLFormField
+            <cmz-form-field
               v-for="field in depPlugin.manifest.settings"
               :key="field.key"
               :label="field.label"
               :hint="field.description"
             >
               <template v-if="field.type === 'string'">
-                <SLInput v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]" />
+                <cmz-input v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]" />
               </template>
               <template v-else-if="field.type === 'color'">
                 <div class="color-row-inline">
@@ -379,14 +326,14 @@ watch(
                 </div>
               </template>
               <template v-else-if="field.type === 'textarea'">
-                <SLTextarea
+                <cmz-textarea
                   v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]"
                   :rows="field.rows"
                   :maxlength="field.maxlength"
                 />
               </template>
               <template v-else-if="field.type === 'number'">
-                <SLInput
+                <cmz-input
                   type="number"
                   :model-value="String(dependentSettingsForms[depPlugin.manifest.id][field.key])"
                   @update:model-value="
@@ -395,10 +342,10 @@ watch(
                 />
               </template>
               <template v-else-if="field.type === 'boolean'">
-                <SLSwitch v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]" />
+                <cmz-switch v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]" />
               </template>
               <template v-else-if="field.type === 'checkbox'">
-                <SLCheckbox v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]" />
+                <cmz-checkbox v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]" />
               </template>
               <template v-else-if="field.type === 'select' && field.display === 'button-group'">
                 <div class="btn-group">
@@ -417,20 +364,20 @@ watch(
                 </div>
               </template>
               <template v-else-if="field.type === 'select'">
-                <SLSelect
+                <cmz-select
                   v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]"
                   :options="field.options || []"
                 />
               </template>
-            </SLFormField>
+            </cmz-form-field>
           </div>
-        </SLCard>
+        </cmz-card>
       </template>
 
       <div class="action-buttons">
-        <SLButton variant="secondary" @click="resetToDefault">{{
+        <cmz-button variant="outline" @click="resetToDefault">{{
           i18n.t("plugins.reset_default")
-        }}</SLButton>
+        }}</cmz-button>
         <span class="auto-save-hint">{{
           saving ? i18n.t("plugins.saving") : i18n.t("plugins.auto_saved")
         }}</span>
@@ -458,22 +405,6 @@ watch(
   justify-content: center;
   padding: 48px;
   color: var(--sl-text-secondary);
-}
-
-.loading-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin-bottom: 12px;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .category-header {
@@ -557,7 +488,7 @@ watch(
   height: 36px;
   padding: 2px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
+  border-radius: var(--sl-radius-sm);
   background: transparent;
   cursor: pointer;
   flex-shrink: 0;
@@ -652,7 +583,13 @@ watch(
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--sl-radius-md, 10px);
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    color 0.2s,
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s,
+    opacity 0.2s;
   color: var(--sl-text-primary);
   min-width: 80px;
 }
@@ -720,7 +657,7 @@ watch(
   height: 36px;
   padding: 2px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
+  border-radius: var(--sl-radius-sm);
   background: transparent;
   cursor: pointer;
   flex-shrink: 0;
@@ -757,7 +694,13 @@ watch(
   border-radius: var(--sl-radius-md, 8px);
   color: var(--sl-text-secondary);
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    color 0.2s,
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s,
+    opacity 0.2s;
 }
 
 .btn-group-item:hover {

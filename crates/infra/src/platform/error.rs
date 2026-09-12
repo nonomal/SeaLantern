@@ -1,0 +1,71 @@
+use std::fmt;
+use std::path::PathBuf;
+
+/// 平台基础设施操作返回的错误。
+#[derive(Debug)]
+pub enum PlatformError {
+    /// 无法读取 CA 证书文件。
+    ReadCertificate {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// PEM 内容不是有效的 CA 证书束。
+    InvalidCertificate { message: String },
+    /// 当前平台不支持请求的系统操作。
+    Unsupported { operation: &'static str },
+    /// 系统命令无法启动或以失败状态退出。
+    Command {
+        operation: &'static str,
+        source: std::io::Error,
+    },
+    /// 系统命令返回了无法解释的输出。
+    InvalidCommandOutput { operation: &'static str },
+    /// 无法确定默认运行路径（标准数据目录、文档目录与当前目录均不可用）。
+    ResolveDefaultRunPath { source: std::io::Error },
+    /// 无法枚举系统字体族。
+    FontEnumerationFailed { message: String },
+    /// 无法访问系统剪贴板。
+    ClipboardFailed { message: String },
+}
+
+impl fmt::Display for PlatformError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReadCertificate { path, source } => {
+                write!(formatter, "failed to read CA certificate '{}': {source}", path.display())
+            }
+            Self::InvalidCertificate { message } => {
+                write!(formatter, "invalid CA certificate bundle: {message}")
+            }
+            Self::Unsupported { operation } => {
+                write!(formatter, "{operation} is not supported on this platform")
+            }
+            Self::Command { operation, source } => {
+                write!(formatter, "failed to {operation}: {source}")
+            }
+            Self::InvalidCommandOutput { operation } => {
+                write!(formatter, "{operation} returned an unexpected result")
+            }
+            Self::ResolveDefaultRunPath { source } => {
+                write!(formatter, "failed to resolve default run path: {source}")
+            }
+            Self::FontEnumerationFailed { message } => {
+                write!(formatter, "failed to enumerate system fonts: {message}")
+            }
+            Self::ClipboardFailed { message } => {
+                write!(formatter, "failed to access system clipboard: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PlatformError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ReadCertificate { source, .. }
+            | Self::Command { source, .. }
+            | Self::ResolveDefaultRunPath { source } => Some(source),
+            _ => None,
+        }
+    }
+}

@@ -1,15 +1,36 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, onActivated, nextTick, computed, watch } from "vue";
-import SLButton from "@components/common/SLButton.vue";
-import ConsoleInput from "@components/console/ConsoleInput.vue";
+import {
+  ref,
+  onMounted,
+  onUnmounted,
+  onActivated,
+  onDeactivated,
+  nextTick,
+  computed,
+  watch,
+} from "vue";
+import { Cpu, HardDrive, MemoryStick } from "lucide-vue-next";
+import SLConfirmDialog from "@components/common/SLConfirmDialog.vue";
 import CommandModal from "@components/console/CommandModal.vue";
 import ConsoleOutput from "@components/console/ConsoleOutput.vue";
 import { useServerStore } from "@stores/serverStore";
 import { serverApi } from "@api/server";
 import { settingsApi } from "@api/settings";
+import { shareLogs } from "@api/logging";
+import {
+  serverSystemInfo,
+  serverCpuUsage,
+  serverStatsLoading,
+  serverStatsError,
+  fetchServerResourceUsage,
+  resetStatsHistory,
+  startThemeObserver,
+  stopThemeObserver,
+} from "@utils/statsUtils";
 import { i18n } from "@language";
 import { useLoading } from "@composables/useAsync";
 import { SETTINGS_UPDATE_EVENT, type SettingsUpdateEvent } from "@stores/settingsStore";
+import { formatBytes } from "@utils/serverUtils";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 const serverStore = useServerStore();
@@ -32,7 +53,55 @@ const consoleLetterSpacing = ref(0);
 const maxLogLines = ref(5000);
 const { loading: startLoading, start: startStartLoading, stop: stopStartLoading } = useLoading();
 const { loading: stopLoading, start: startStopLoading, stop: stopStopLoading } = useLoading();
+const {
+  loading: forceStopLoading,
+  start: startForceStopLoading,
+  stop: stopForceStopLoading,
+} = useLoading();
+const { loading: shareLoading, start: startShareLoading, stop: stopShareLoading } = useLoading();
 let unlistenLogLine: UnlistenFn | null = null;
+let statsTimer: ReturnType<typeof setInterval> | null = null;
+const SERVER_STATS_POLL_INTERVAL_MS = 3000;
+// 页面隐藏时暂停轮询,避免后台无意义 IPC 开销
+let isPageVisible = true;
+
+// 日志批量缓冲:低输出逐行实时,高输出积压批量,避免每行触发全量重算
+let pendingLogLines: string[] = [];
+let logFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let lastLogAppendAt = 0;
+const LOG_FLUSH_DELAY_MS = 50;
+const LOG_FLUSH_MAX_LINES = 50;
+
+// 逐行追加日志到控制台,高输出时自动聚合为批量
+function appendLogLine(line: string) {
+  const now = performance.now();
+  // 距上次追加超过窗口视为低输出,直接逐行追加保持零延迟
+  if (pendingLogLines.length === 0 && now - lastLogAppendAt >= LOG_FLUSH_DELAY_MS) {
+    flushLogLines([line]);
+    return;
+  }
+  pendingLogLines.push(line);
+  if (pendingLogLines.length >= LOG_FLUSH_MAX_LINES) {
+    flushLogLines();
+  } else if (logFlushTimer == null) {
+    logFlushTimer = setTimeout(() => flushLogLines(), LOG_FLUSH_DELAY_MS);
+  }
+}
+
+function flushLogLines(immediate?: string[]) {
+  if (logFlushTimer != null) {
+    clearTimeout(logFlushTimer);
+    logFlushTimer = null;
+  }
+  const batch = immediate ?? pendingLogLines;
+  pendingLogLines = [];
+  if (batch.length === 0) return;
+  lastLogAppendAt = performance.now();
+  consoleOutputRef.value?.appendLines(batch);
+}
+const forceStopConfirmVisible = ref(false);
+const pendingForceStopServerId = ref("");
+const pendingForceStopToken = ref("");
 
 const showCommandModal = ref(false);
 const commandModalTitle = ref("");
@@ -54,40 +123,751 @@ const quickCommands = computed(() => [
   { label: i18n.t("common.command_mob_griefing_off"), cmd: "gamerule mobGriefing false" },
 ]);
 
+// 命令补全 MD（Minecraft 原版常用命令）
+const commandCompletionsMd = `
+advancement
+  grant
+    <targets>
+      everything
+      only
+        <advancement>
+          <criterion>
+      from
+        <advancement>
+      until
+        <advancement>
+      through
+        <advancement>
+  revoke
+    <targets>
+      everything
+      only
+        <advancement>
+          <criterion>
+      from
+        <advancement>
+      until
+        <advancement>
+      through
+        <advancement>
+attribute
+  <target>
+    <attribute>
+      get
+        <scale>
+      base
+        get
+          <scale>
+        set
+          <value>
+      modifier
+        add
+          <id> <name> <value> <operation>
+        remove
+          <id>
+        get
+          <id>
+            <scale>
+ban
+  <targets>
+    <reason>
+ban-ip
+  <target>
+    <reason>
+banlist
+  ips
+  players
+bossbar
+  add
+    <id> <name>
+  get
+    <id>
+      max
+      players
+      value
+      visible
+      name
+      color
+      style
+  list
+  remove
+    <id>
+  set
+    <id>
+      color
+        <color>
+      max
+        <max>
+      name
+        <name>
+      players
+        <players>
+      style
+        <style>
+      value
+        <value>
+      visible
+        <visible>
+clear
+  <targets>
+    <item>
+      <max_count>
+clone
+  <begin> <end> <destination>
+    replace
+    masked
+    filtered
+      <block>
+        force
+        move
+        normal
+data
+  get
+    block <targetPos> <path> <scale>
+    entity <target> <path> <scale>
+    storage <source> <path> <scale>
+  merge
+    block <targetPos> <nbt>
+    entity <target> <nbt>
+    storage <target> <nbt>
+  modify
+    block <targetPos> <path> append <value>
+    block <targetPos> <path> insert <index> <value>
+    block <targetPos> <path> merge <value>
+    block <targetPos> <path> prepend <value>
+    block <targetPos> <path> set <value>
+    block <targetPos> <path> remove
+    entity <target> <path> append <value>
+    entity <target> <path> insert <index> <value>
+    entity <target> <path> merge <value>
+    entity <target> <path> prepend <value>
+    entity <target> <path> set <value>
+    entity <target> <path> remove
+    storage <target> <path> append <value>
+    storage <target> <path> insert <index> <value>
+    storage <target> <path> merge <value>
+    storage <target> <path> prepend <value>
+    storage <target> <path> set <value>
+    storage <target> <path> remove
+  remove
+    block <targetPos> <path>
+    entity <target> <path>
+    storage <target> <path>
+datapack
+  list
+    available
+    enabled
+  enable
+    <name>
+      after <existing>
+      before <existing>
+      last
+      first
+  disable
+    <name>
+debug
+  start
+  stop
+  function
+    <name>
+  report
+  clear
+defaultgamemode
+  survival
+  creative
+  adventure
+  spectator
+deop
+  <players>
+difficulty
+  peaceful
+  easy
+  normal
+  hard
+effect
+  clear
+    <targets>
+  give
+    <targets> <effect>
+      <seconds>
+        <amplifier>
+          <hideParticles>
+enchant
+  <targets> <enchantment>
+    <level>
+execute
+  align <axes>
+  anchored eyes
+  anchored feet
+  as <targets>
+  at <targets>
+  facing entity <entity>
+  facing <pos>
+  in <dimension>
+  positioned <pos>
+  rotated <rot>
+  if block <pos> <block>
+  if blocks <start> <end> <destination> all
+  if blocks <start> <end> <destination> masked
+  if entity <targets>
+  if predicate <predicate>
+  if score <target> <targetObjective> <=> <source> <sourceObjective>
+  if score <target> <targetObjective> matches <range>
+  unless block <pos> <block>
+  unless blocks <start> <end> <destination> all
+  unless blocks <start> <end> <destination> masked
+  unless entity <targets>
+  unless predicate <predicate>
+  unless score <target> <targetObjective> <=> <source> <sourceObjective>
+  unless score <target> <targetObjective> matches <range>
+  run <command>
+experience
+  add <targets> <amount>
+    points
+    levels
+  set <targets> <amount>
+    points
+    levels
+  query <targets>
+    points
+    levels
+fill
+  <from> <to> <block>
+    destroy
+    hollow
+    keep
+    outline
+    replace
+      <filter>
+fillbiome
+  <from> <to> <biome>
+forceload
+  add
+    <from>
+      <to>
+  remove
+    <from>
+      <to>
+    all
+  query
+    <pos>
+function
+  <name>
+gamemode
+  survival
+    <player>
+  creative
+    <player>
+  adventure
+    <player>
+  spectator
+    <player>
+gamerule
+  announceAdvancements
+    true
+    false
+  commandBlockOutput
+    true
+    false
+  disableElytraMovementCheck
+    true
+    false
+  disableRaids
+    true
+    false
+  doDaylightCycle
+    true
+    false
+  doEntityDrops
+    true
+    false
+  doFireTick
+    true
+    false
+  doImmediateRespawn
+    true
+    false
+  doInsomnia
+    true
+    false
+  doLimitedCrafting
+    true
+    false
+  doMobLoot
+    true
+    false
+  doMobSpawning
+    true
+    false
+  doPatrolSpawning
+    true
+    false
+  doTileDrops
+    true
+    false
+  doTraderSpawning
+    true
+    false
+  doWeatherCycle
+    true
+    false
+  doVinesSpread
+    true
+    false
+  doWardenSpawning
+    true
+    false
+  drowningDamage
+    true
+    false
+  fallDamage
+    true
+    false
+  fireDamage
+    true
+    false
+  freezeDamage
+    true
+    false
+  keepInventory
+    true
+    false
+  logAdminCommands
+    true
+    false
+  maxCommandChainLength
+    <value>
+  maxEntityCramming
+    <value>
+  mobGriefing
+    true
+    false
+  naturalRegeneration
+    true
+    false
+  playersSleepingPercentage
+    <value>
+  randomTickSpeed
+    <value>
+  reducedDebugInfo
+    true
+    false
+  sendCommandFeedback
+    true
+    false
+  showDeathMessages
+    true
+    false
+  spawnRadius
+    <value>
+  spectatorsGenerateChunks
+    true
+    false
+give
+  <targets> <item>
+    <count>
+help
+  <command>
+item
+  replace
+    entity <targets> <slot> <item>
+      <count>
+    block <pos> <slot> <item>
+      <count>
+  modify
+    entity <targets> <slot> <modifier>
+    block <pos> <slot> <modifier>
+jfr
+  start
+  stop
+kick
+  <targets>
+    <reason>
+kill
+  <targets>
+list
+  uuids
+locate
+  biome <biome>
+  structure <structure>
+  poi <poi_type>
+loot
+  give <targets> <loot_table>
+  fish <loot_table> <pos> <tool>
+  kill <targets>
+  mine <pos> <tool>
+  insert <targetPos> <loot_table>
+  replace entity <targets> <slot> <loot_table>
+  replace block <pos> <slot> <loot_table>
+me
+  <action>
+msg
+  <target>
+    <message>
+particle
+  <name> <pos>
+    <delta_x> <delta_y> <delta_z> <speed> <count>
+      force
+      normal
+      <viewers>
+playsound
+  <sound>
+    master
+    music
+    record
+    weather
+    block
+    hostile
+    neutral
+    player
+    ambient
+    voice
+    <targets>
+      <pos>
+        <volume>
+          <pitch>
+            <minimum_volume>
+publish
+  <port>
+recipe
+  give
+    <targets> <recipe>
+  take
+    <targets> <recipe>
+reload
+ride
+  <target>
+    mount
+      <vehicle>
+    dismount
+    spawn_ride
+      <entity>
+say
+  <message>
+schedule
+  function <function> <time>
+    append
+    replace
+  clear
+    <function>
+scoreboard
+  objectives
+    list
+    add <name> <criteria>
+      <display_name>
+    remove <name>
+    setdisplay <slot> <objective>
+    modify <name> displayname <name>
+    modify <name> rendertype <type>
+  players
+    list
+      <target>
+    set <target> <objective> <score>
+    add <target> <objective> <score>
+    remove <target> <objective> <score>
+    reset <target>
+      <objective>
+    enable <target> <trigger>
+    operation <target> <targetObjective> <operation> <source> <sourceObjective>
+  teams
+    list
+      <team>
+    add <team>
+      <display_name>
+    remove <team>
+    empty <team>
+    join <team> <members>
+    leave <members>
+    modify <team>
+      displayname <name>
+      color <color>
+      friendlyfire <allowed>
+      seeFriendlyInvisibles <visible>
+      nametagVisibility <visibility>
+      deathMessageVisibility <visibility>
+      collisionRule <rule>
+      prefix <prefix>
+      suffix <suffix>
+      seeFriendlyInvisibles <enabled>
+seed
+setblock
+  <pos> <block>
+    destroy
+    keep
+    replace
+setworldspawn
+  <pos>
+    <angle>
+spawnpoint
+  <targets>
+    <pos>
+      <angle>
+spectate
+  <target>
+    <player>
+spreadplayers
+  <center> <spread_distance> <max_range> <max_teams>
+    <teams>
+      <respect_teams>
+stop
+stopsound
+  <targets>
+    *
+    master
+    music
+    record
+    weather
+    block
+    hostile
+    neutral
+    player
+    ambient
+    voice
+    <sound>
+summon
+  <entity>
+    <pos>
+      <nbt>
+tag
+  <targets>
+    add <name>
+    remove <name>
+    list
+team
+  list
+    <team>
+  add <team>
+    <display_name>
+  remove <team>
+  empty <team>
+  join <team> <members>
+  leave <members>
+  modify <team>
+    displayname <name>
+    color <color>
+    friendlyfire <allowed>
+    seeFriendlyInvisibles <visible>
+    nametagVisibility <visibility>
+    deathMessageVisibility <visibility>
+    collisionRule <rule>
+    prefix <prefix>
+    suffix <suffix>
+teammsg
+  <message>
+teleport
+  <destination>
+  <targets> <destination>
+  <targets> <x> <y> <z>
+    <yaw> <pitch>
+tell
+  <target>
+    <message>
+tellraw
+  <targets>
+    <message>
+time
+  set
+    day
+    night
+    midnight
+    noon
+    <time>
+  add
+    <time>
+  query
+    daytime
+    gametime
+    day
+title
+  <targets>
+    title <title>
+    subtitle <subtitle>
+    actionbar <actionbar>
+    times <fadeIn> <stay> <fadeOut>
+    clear
+    reset
+tm
+  <message>
+tp
+  <destination>
+  <targets> <destination>
+  <targets> <x> <y> <z>
+trigger
+  <objective>
+    <value>
+    add <value>
+weather
+  clear
+    <duration>
+  rain
+    <duration>
+  thunder
+    <duration>
+w
+  <target>
+    <message>
+whitelist
+  on
+  off
+  list
+  add <players>
+  remove <players>
+  reload
+worldborder
+  add <distance>
+    <time>
+  set <distance>
+    <time>
+  center <pos>
+  damage
+    buffer <distance>
+    amount <damage_per_block>
+  warning
+    distance <distance>
+    time <time>
+  get
+xp
+  add <targets> <amount>
+    points
+    levels
+  set <targets> <amount>
+    points
+    levels
+  query <targets>
+    points
+    levels
+save-all
+  flush
+save-on
+save-off
+stop
+restart
+list
+tps
+help
+`;
+
 const serverId = computed(() => serverStore.currentServerId || "");
+const currentServer = computed(
+  () => serverStore.servers.find((server) => server.id === serverId.value) || null,
+);
+const serverProcessInfo = computed(() => serverSystemInfo.value);
+const serverStatsUnavailable = computed(() => serverStatsError.value && !serverProcessInfo.value);
+
+const statusColor = computed(() => {
+  if (isRunning.value) return "#22c55e";
+  if (isStarting.value || isStopping.value) return "#f59e0b";
+  return "#64748b";
+});
+
+const statsSummaryItems = computed(() => [
+  {
+    key: "cpu",
+    icon: Cpu,
+    label: i18n.t("home.cpu"),
+    value: serverStatsUnavailable.value ? "--" : `${serverCpuUsage.value}%`,
+    detail: "",
+    tone: "primary",
+  },
+  {
+    key: "memory",
+    icon: MemoryStick,
+    label: i18n.t("home.memory"),
+    value:
+      serverProcessInfo.value && currentServer.value
+        ? `${formatBytes(serverProcessInfo.value.memory.used)} / ${currentServer.value.max_memory} MB`
+        : "--",
+    detail: "",
+    tone: "success",
+  },
+  {
+    key: "disk",
+    icon: HardDrive,
+    label: i18n.t("home.disk"),
+    value: serverProcessInfo.value ? formatBytes(serverProcessInfo.value.disk.used) : "--",
+    detail: "",
+    tone: "warning",
+  },
+]);
 
 const serverStatus = computed(() => serverStore.statuses[serverId.value]?.status || "Stopped");
 
 const isRunning = computed(() => serverStatus.value === "Running");
-const isStopped = computed(
-  () => serverStatus.value === "Stopped" || serverStatus.value === "Error" || !serverStatus.value,
-);
 const isStopping = computed(() => serverStatus.value === "Stopping");
 const isStarting = computed(() => serverStatus.value === "Starting");
 
+async function refreshServerStats() {
+  const sid = serverId.value;
+  if (!sid) {
+    serverStatsLoading.value = false;
+    return;
+  }
+  await Promise.all([fetchServerResourceUsage(sid), serverStore.refreshStatus(sid)]);
+}
+
+function startStatsPolling() {
+  stopStatsPolling();
+  void refreshServerStats();
+  statsTimer = setInterval(() => {
+    if (!isPageVisible) return;
+    void refreshServerStats();
+  }, SERVER_STATS_POLL_INTERVAL_MS);
+}
+
+function stopStatsPolling() {
+  if (statsTimer) {
+    clearInterval(statsTimer);
+    statsTimer = null;
+  }
+}
+
+function handleVisibilityChange() {
+  const visible = document.visibilityState === "visible";
+  if (visible === isPageVisible) return;
+  isPageVisible = visible;
+  if (visible) {
+    if (isRunning.value) startStatsPolling();
+  } else {
+    stopStatsPolling();
+  }
+}
+
 onMounted(async () => {
   await loadConsoleSettings();
+  startThemeObserver();
   window.addEventListener(SETTINGS_UPDATE_EVENT, handleSettingsUpdate as EventListener);
 
-  await serverStore.refreshList();
-  // 如果没有当前服务器但有服务器列表，选择第一个
+  try {
+    await serverStore.refreshList();
+  } catch (e) {
+    console.warn("Failed to load servers:", e);
+  }
   if (!serverStore.currentServerId && serverStore.servers.length > 0) {
     serverStore.setCurrentServer(serverStore.servers[0].id);
   }
   if (serverId.value) {
     await serverStore.refreshStatus(serverId.value);
     await syncLogsOnce(serverId.value);
+    // 仅在服务器运行时启动资源轮询
+    if (isRunning.value) startStatsPolling();
   }
-  unlistenLogLine = await serverApi.onLogLine(({ server_id, line }) => {
+  unlistenLogLine = await serverApi.onLogLine(({ instance_id, line }) => {
     const sid = serverId.value;
-    if (!sid || server_id !== sid) return;
-    consoleOutputRef.value?.appendLines([line]);
+    if (!sid || instance_id !== sid) return;
+    appendLogLine(line.line);
   });
   nextTick(() => doScroll());
 });
 
 onUnmounted(() => {
   window.removeEventListener(SETTINGS_UPDATE_EVENT, handleSettingsUpdate as EventListener);
+  stopThemeObserver();
+  stopStatsPolling();
+  if (logFlushTimer != null) {
+    clearTimeout(logFlushTimer);
+    logFlushTimer = null;
+  }
+  pendingLogLines = [];
   if (unlistenLogLine) {
     unlistenLogLine();
     unlistenLogLine = null;
@@ -96,25 +876,72 @@ onUnmounted(() => {
 
 onActivated(async () => {
   await loadConsoleSettings();
+  startThemeObserver();
+  // 仅在服务器运行时启动资源轮询
+  if (isRunning.value) startStatsPolling();
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  // 重新激活时重新加载当前服务器日志（可能在其它页面已启动服务器）
+  const sid = serverId.value;
+  if (sid) {
+    await syncLogsOnce(sid);
+    nextTick(() => doScroll());
+  }
+});
+
+// keep-alive 缓存时 onUnmounted 不会触发,需在 onDeactivated 中暂停资源
+// (unlistenLogLine 与 SETTINGS_UPDATE_EVENT 监听保留,切回时仍可用)
+onDeactivated(() => {
+  stopThemeObserver();
+  stopStatsPolling();
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+  // 切走前 flush 积压日志,避免缓冲区残留
+  flushLogLines();
 });
 
 watch(
   () => serverId.value,
   async (sid) => {
+    resetStatsHistory();
+    stopStatsPolling();
     if (!sid) return;
     await serverStore.refreshStatus(sid);
     await syncLogsOnce(sid);
     userScrolledUp.value = false;
+    // 仅在服务器运行时启动资源轮询
+    if (isRunning.value) startStatsPolling();
     nextTick(() => doScroll());
   },
 );
 
+// 服务器运行状态切换时启停轮询,停止后不再消耗 CPU/IO
+watch(isRunning, (running) => {
+  if (running) {
+    startStatsPolling();
+  } else {
+    stopStatsPolling();
+  }
+});
+
+// 日志同步请求序号:快速切换服务器时丢弃过期响应,避免旧日志写入新服务器的显示
+let syncLogsSeq = 0;
+
 async function syncLogsOnce(sid: string) {
+  const seq = ++syncLogsSeq;
   consoleOutputRef.value?.clear();
   try {
     const lines = await serverApi.getLogs(sid, 0, Math.max(1, maxLogLines.value));
-    consoleOutputRef.value?.appendLines(lines);
-  } catch (_e) {}
+    // 期间已切换到其它服务器,丢弃这次过期结果
+    if (seq !== syncLogsSeq) return;
+    if (lines.length === 0) {
+      consoleOutputRef.value?.appendLines([i18n.t("console.no_logs_yet")]);
+    } else {
+      consoleOutputRef.value?.appendLines(lines.map((line) => line.line));
+    }
+  } catch (e) {
+    if (seq !== syncLogsSeq) return;
+    console.warn("加载服务器日志失败:", e);
+    consoleOutputRef.value?.appendLines([i18n.t("console.logs_load_failed")]);
+  }
 }
 
 async function loadConsoleSettings() {
@@ -146,7 +973,7 @@ async function sendCommand(cmd?: string) {
   const command = (cmd || commandInput.value).trim();
   const sid = serverId.value;
   if (!command || !sid) return;
-  consoleOutputRef.value?.appendLines(["> " + command]);
+  consoleOutputRef.value?.appendLines([`>>> ${command}`]);
   commandHistory.value.push(command);
   if (commandHistory.value.length > 500) {
     commandHistory.value.splice(0, commandHistory.value.length - 500);
@@ -173,6 +1000,10 @@ async function handleStart() {
   try {
     await serverApi.start(sid);
     await serverStore.refreshStatus(sid);
+    await refreshServerStats();
+    // 启动后重新拉取日志（可能在启动瞬间已有初始日志写入）
+    await syncLogsOnce(sid);
+    nextTick(() => doScroll());
   } catch (e) {
     consoleOutputRef.value?.appendLines(["[ERROR] " + String(e)]);
   } finally {
@@ -187,6 +1018,7 @@ async function handleStop() {
   try {
     await serverApi.stop(sid);
     await serverStore.refreshStatus(sid);
+    await refreshServerStats();
   } catch (e) {
     consoleOutputRef.value?.appendLines(["[ERROR] " + String(e)]);
   } finally {
@@ -194,108 +1026,169 @@ async function handleStop() {
   }
 }
 
-async function exportLogs() {
-  const text = consoleOutputRef.value?.getAllPlainText() || "";
-  if (!text.trim()) return;
-  const lineCount = text.split("\n").length;
+async function handleForceStop(event?: Event) {
+  event?.preventDefault();
+  event?.stopPropagation();
+
+  const sid = serverId.value;
+  if (!sid || forceStopLoading.value) return;
+
   try {
-    await navigator.clipboard.writeText(text);
+    const preparation = await serverApi.prepareForceStop(sid);
+    pendingForceStopServerId.value = sid;
+    pendingForceStopToken.value = preparation.token;
+    forceStopConfirmVisible.value = true;
+  } catch (e) {
+    consoleOutputRef.value?.appendLines(["[ERROR] " + String(e)]);
+  }
+}
+
+function handleForceStopCancel() {
+  forceStopConfirmVisible.value = false;
+  pendingForceStopServerId.value = "";
+  pendingForceStopToken.value = "";
+}
+
+async function confirmForceStop() {
+  const sid = pendingForceStopServerId.value;
+  const token = pendingForceStopToken.value;
+  if (!sid || !token || forceStopLoading.value) {
+    handleForceStopCancel();
+    return;
+  }
+
+  startForceStopLoading();
+  try {
+    await serverApi.forceStop(sid, token);
     consoleOutputRef.value?.appendLines([
-      "[Sea Lantern] 日志已复制到剪贴板（" + lineCount + " 行）",
+      "[Sea Lantern] " + i18n.t("console.force_stop_requested"),
     ]);
-  } catch (_e) {
-    consoleOutputRef.value?.appendLines(["[Sea Lantern] 复制日志到剪贴板失败"]);
+    await serverStore.refreshStatus(sid);
+    await refreshServerStats();
+  } catch (e) {
+    consoleOutputRef.value?.appendLines(["[ERROR] " + String(e)]);
+  } finally {
+    stopForceStopLoading();
+    handleForceStopCancel();
   }
 }
 
-function getStatusClass(): string {
-  const s = serverStore.statuses[serverId.value]?.status;
-  return s === "Running"
-    ? "running"
-    : s === "Starting"
-      ? "starting"
-      : s === "Stopping"
-        ? "stopping"
-        : "stopped";
-}
-
-function getStatusText(): string {
-  const s = serverStore.statuses[serverId.value]?.status;
-  switch (s) {
-    case "Running":
-      return i18n.t("common.server_status_running");
-    case "Starting":
-      return i18n.t("common.server_status_starting");
-    case "Stopping":
-      return i18n.t("common.server_status_stopping");
-    case "Error":
-      return i18n.t("common.server_status_error");
-    default:
-      return i18n.t("common.server_status_stopped");
-  }
+function exportLogs() {
+  const content = consoleOutputRef.value?.getAllPlainText() || "";
+  if (!content) return;
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `console-${serverId.value || "server"}.log`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function handleClearLogs() {
   consoleOutputRef.value?.clear();
-  userScrolledUp.value = false;
 }
 
-function saveCommand() {
-  console.warn("saveCommand not implemented");
-  showCommandModal.value = false;
+async function handleShareLogs() {
+  const text = consoleOutputRef.value?.getAllPlainText() || "";
+  if (!text.trim()) {
+    consoleOutputRef.value?.appendLines(["[Sea Lantern] " + i18n.t("console.share_log_empty")]);
+    return;
+  }
+  startShareLoading();
+  try {
+    const url = await shareLogs(text);
+    try {
+      await navigator.clipboard.writeText(url);
+      consoleOutputRef.value?.appendLines([
+        "[Sea Lantern] " + i18n.t("console.share_log_success") + " " + url,
+      ]);
+    } catch (_e) {
+      // 剪贴板不可用时仍输出链接，并提示用户手动复制
+      consoleOutputRef.value?.appendLines([
+        "[Sea Lantern] " + i18n.t("console.share_log_success_manual_copy") + " " + url,
+      ]);
+    }
+  } catch (e) {
+    consoleOutputRef.value?.appendLines([
+      "[Sea Lantern] " + i18n.t("console.share_log_failed") + ": " + String(e),
+    ]);
+  } finally {
+    stopShareLoading();
+  }
 }
 
-function deleteCommand(_cmd: import("@type/server").ServerCommand) {
-  console.warn("deleteCommand not implemented");
-  showCommandModal.value = false;
+function getStatusText() {
+  if (isRunning.value) return i18n.t("home.running");
+  if (isStarting.value) return i18n.t("home.starting");
+  if (isStopping.value) return i18n.t("home.stopping");
+  return i18n.t("home.stopped");
 }
+
+function saveCommand() {}
+function deleteCommand() {}
 </script>
 
 <template>
-  <div class="console-view animate-fade-in-up">
+  <div class="console-view animate-stagger-in">
     <div class="console-toolbar">
       <div class="toolbar-left">
-        <div v-if="serverId" class="server-name-display">
-          {{
-            serverStore.servers.find((s) => s.id === serverId)?.name || i18n.t("console.no_server")
-          }}
-        </div>
-        <div v-else class="server-name-display">{{ i18n.t("console.no_server") }}</div>
-        <div v-if="serverId" class="status-indicator" :class="getStatusClass()">
-          <span class="status-dot"></span>
-          <span class="status-label">{{ getStatusText() }}</span>
-        </div>
+        <span class="server-name-display">
+          {{ currentServer?.name || i18n.t("console.no_server") }}
+        </span>
+        <cmz-badge v-if="serverId" dot :text="getStatusText()" :color="statusColor" />
       </div>
       <div class="toolbar-right">
         <div class="action-group primary-actions">
-          <SLButton
+          <cmz-button
             v-if="isRunning || isStarting"
-            variant="danger"
+            type="button"
+            variant="solid"
+            color="#ef4444"
             size="sm"
             :loading="stopLoading"
-            :disabled="isStopping || stopLoading"
-            @click="handleStop"
+            :disabled="isStopping || stopLoading || forceStopLoading"
+            @click.stop.prevent="handleStop"
           >
             {{ isStarting ? i18n.t("home.stop") : i18n.t("home.stop") }}
-          </SLButton>
-          <SLButton
+          </cmz-button>
+          <cmz-button
+            v-if="isRunning || isStarting || isStopping"
+            type="button"
+            variant="outline"
+            size="sm"
+            :loading="forceStopLoading"
+            :disabled="forceStopLoading || stopLoading"
+            @click.stop.prevent="handleForceStop"
+          >
+            {{ i18n.t("console.force_stop") }}
+          </cmz-button>
+          <cmz-button
             v-else
-            variant="primary"
+            type="button"
             size="sm"
             :loading="startLoading"
-            :disabled="isStopping || startLoading"
-            @click="handleStart"
+            :disabled="isStopping || startLoading || forceStopLoading"
+            @click.stop.prevent="handleStart"
           >
             {{ i18n.t("home.start") }}
-          </SLButton>
+          </cmz-button>
         </div>
         <div class="action-group secondary-actions">
-          <SLButton variant="secondary" size="sm" @click="exportLogs">{{
+          <cmz-button variant="outline" size="sm" @click="exportLogs">{{
             i18n.t("console.copy_log")
-          }}</SLButton>
-          <SLButton variant="ghost" size="sm" @click="handleClearLogs">{{
+          }}</cmz-button>
+          <cmz-button variant="ghost" size="sm" @click="handleClearLogs">{{
             i18n.t("console.clear_log")
-          }}</SLButton>
+          }}</cmz-button>
+          <cmz-button
+            variant="ghost"
+            size="sm"
+            :loading="shareLoading"
+            :disabled="shareLoading"
+            @click="handleShareLogs"
+            >{{ i18n.t("console.share_log") }}</cmz-button
+          >
         </div>
       </div>
     </div>
@@ -320,25 +1213,35 @@ function deleteCommand(_cmd: import("@type/server").ServerCommand) {
         </div>
       </div>
 
-      <!-- 控制台输出部分 -->
-      <ConsoleOutput
-        ref="consoleOutputRef"
-        :consoleFontSize="consoleFontSize"
-        :consoleFontFamily="consoleFontFamily"
-        :consoleLetterSpacing="consoleLetterSpacing"
-        :maxLogLines="maxLogLines"
-        :userScrolledUp="userScrolledUp"
-        @scroll="(value) => (userScrolledUp = value)"
-        @scrollToBottom="
-          userScrolledUp = false;
-          doScroll();
-        "
-      />
+      <div class="console-terminal-shell">
+        <ConsoleOutput
+          ref="consoleOutputRef"
+          :consoleFontSize="consoleFontSize"
+          :consoleFontFamily="consoleFontFamily"
+          :consoleLetterSpacing="consoleLetterSpacing"
+          :maxLogLines="maxLogLines"
+          :history="commandHistory"
+          :completionMd="commandCompletionsMd"
+          @command="sendCommand"
+        />
 
-      <!-- 控制台输入部分 -->
-      <ConsoleInput :consoleFontSize="consoleFontSize" @sendCommand="sendCommand" />
+        <div class="console-stats-summary">
+          <div
+            v-for="item in statsSummaryItems"
+            :key="item.key"
+            class="stats-summary-card"
+            :class="`stats-summary-card--${item.tone}`"
+          >
+            <component :is="item.icon" :size="16" class="stats-summary-icon" />
+            <div class="stats-summary-content">
+              <span class="stats-summary-label">{{ item.label }}</span>
+              <strong class="stats-summary-value">{{ item.value }}</strong>
+              <span class="stats-summary-detail">{{ item.detail }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <!-- 自定义指令模态框 -->
       <CommandModal
         :visible="showCommandModal"
         :title="commandModalTitle"
@@ -352,8 +1255,20 @@ function deleteCommand(_cmd: import("@type/server").ServerCommand) {
         @updateName="(value) => (commandName = value)"
         @updateText="(value) => (commandText = value)"
       />
+
+      <SLConfirmDialog
+        :visible="forceStopConfirmVisible"
+        :title="i18n.t('console.force_stop')"
+        :message="i18n.t('console.force_stop_confirm')"
+        :confirm-text="i18n.t('common.confirm')"
+        :cancel-text="i18n.t('common.cancel')"
+        confirm-variant="danger"
+        :dangerous="true"
+        :loading="forceStopLoading"
+        @confirm="confirmForceStop"
+        @cancel="handleForceStopCancel"
+        @close="handleForceStopCancel"
+      />
     </template>
   </div>
 </template>
-
-<style src="@styles/views/ConsoleView.css" scoped></style>

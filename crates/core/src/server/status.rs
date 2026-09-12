@@ -1,0 +1,133 @@
+use std::io;
+use std::process::ExitStatus;
+
+use serde::Serialize;
+use serde::ser::{SerializeStruct, Serializer};
+
+use crate::process::Daemon;
+
+/// 服务器守护进程的一个时间点快照。
+#[derive(Debug)]
+pub struct ServerStatus {
+    pub process_id: u32,
+    pub state: ServerProcessState,
+}
+
+/// 由服务器守护进程报告的进程状态。
+#[derive(Debug)]
+pub enum ServerProcessState {
+    Running,
+    Exited(ExitStatus),
+}
+
+/// `ServerProcessState` 的传输表示。
+///
+/// `Exited` 携带 `std::process::ExitStatus`（不可直接序列化），这里抽取退出码：
+/// `None` 表示信号终止（无退出码），`Some(code)` 表示正常/非零退出。
+impl Serialize for ServerProcessState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Running => {
+                let mut state = serializer.serialize_struct("ServerProcessState", 1)?;
+                state.serialize_field("state", "running")?;
+                state.end()
+            }
+            Self::Exited(exit_status) => {
+                let mut state = serializer.serialize_struct("ServerProcessState", 2)?;
+                state.serialize_field("state", "exited")?;
+                state.serialize_field("code", &exit_status.code())?;
+                state.end()
+            }
+        }
+    }
+}
+
+impl Serialize for ServerStatus {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("ServerStatus", 2)?;
+        state.serialize_field("process_id", &self.process_id)?;
+        state.serialize_field("state", &self.state)?;
+        state.end()
+    }
+}
+
+impl ServerStatus {
+    /// 包装由守护进程收集的当前状态。
+    pub fn from_daemon(daemon: &mut Daemon) -> io::Result<Self> {
+        let process_id = daemon.id();
+        let state = match daemon.poll()? {
+            Some(exit_status) => ServerProcessState::Exited(exit_status),
+            None => ServerProcessState::Running,
+        };
+
+        Ok(Self { state, process_id })
+    }
+}
+
+// 受制于 GitHub 机器关于杀进程的不稳定性，杀进程测试不会为 Unix 开放。
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::{ServerProcessState, ServerStatus};
+    use crate::process::Daemon;
+
+    #[cfg(unix)]
+    fn exit_successfully_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        command
+    }
+
+    #[cfg(windows)]
+    fn exit_successfully_command() -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "exit 0"]);
+        command
+    }
+
+    #[cfg(unix)]
+    fn long_running_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        command
+    }
+
+    #[cfg(windows)]
+    fn long_running_command() -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "ping -n 30 127.0.0.1 > NUL"]);
+        command
+    }
+
+    #[cfg_attr(ci_skip_validation, ignore)]
+    #[test]
+    fn wraps_a_running_daemon() {
+        let mut command = long_running_command();
+        let mut daemon = Daemon::spawn(&mut command).expect("spawn test process");
+        let process_id = daemon.id();
+
+        let status = ServerStatus::from_daemon(&mut daemon).expect("observe running daemon");
+
+        assert_eq!(status.process_id, process_id);
+        assert!(matches!(status.state, ServerProcessState::Running));
+        daemon
+            .terminate_tree()
+            .expect("terminate test process tree");
+    }
+
+    #[cfg_attr(ci_skip_validation, ignore)]
+    #[test]
+    fn wraps_a_finished_daemon_exit_status() {
+        let mut command = exit_successfully_command();
+        let mut daemon = Daemon::spawn(&mut command).expect("spawn test process");
+        let _ = daemon.wait().expect("wait for test process");
+
+        let status = ServerStatus::from_daemon(&mut daemon).expect("observe finished daemon");
+
+        assert!(matches!(
+            status.state,
+            ServerProcessState::Exited(exit_status) if exit_status.success()
+        ));
+    }
+}

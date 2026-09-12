@@ -1,13 +1,14 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { listen, emit, type UnlistenFn } from "@tauri-apps/api/event";
+import { isBrowserEnv } from "@api/tauri";
 import { registerPluginLocale, addPluginTranslations, removePluginTranslations } from "@language";
 import { useComponentRegistry } from "@composables/useComponentRegistry";
-import { useToast } from "@composables/useToast";
+import { useToast } from "cmzya-modern-ui";
 import DOMPurify from "dompurify";
 import * as pluginApi from "@api/plugin";
-import type { BufferedComponentEvent } from "@api/plugin";
 import { setThemeProviderOverrides } from "@utils/theme";
+import { useContextMenuStore } from "@stores/contextMenuStore";
 import type {
   PluginInfo,
   PluginNavItem,
@@ -16,7 +17,6 @@ import type {
   MissingDependency,
   BatchInstallResult,
   SidebarItem,
-  PluginDependency,
   SidebarMode,
   PluginUiAction,
   PluginPermissionLog,
@@ -135,6 +135,46 @@ function removePluginUiElements(pluginId: string) {
   });
 }
 
+function setFormFieldValue(field: Element, value: unknown) {
+  if (field instanceof HTMLInputElement) {
+    const type = field.type.toLowerCase();
+    if (type === "checkbox") {
+      field.checked = Boolean(value);
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
+    if (type === "radio") {
+      const normalized = value == null ? "" : String(value);
+      if (field.value === normalized) {
+        field.checked = true;
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      return false;
+    }
+
+    field.value = value == null ? "" : String(value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  if (field instanceof HTMLTextAreaElement) {
+    field.value = value == null ? "" : String(value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  if (field instanceof HTMLSelectElement) {
+    field.value = value == null ? "" : String(value);
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  return false;
+}
+
 export const usePluginStore = defineStore("plugin", () => {
   const plugins = ref<PluginInfo[]>([]);
   const navItems = ref<PluginNavItem[]>([]);
@@ -177,6 +217,11 @@ export const usePluginStore = defineStore("plugin", () => {
     const deletes = pendingComponentDeletes.get(pluginId) || [];
     pendingComponentDeletes.delete(pluginId);
     return deletes;
+  }
+
+  // 供渲染器探测是否有待处理组件,无待处理时跳过全量遍历,避免空转
+  function hasPendingComponents(): boolean {
+    return pendingComponentCreates.size > 0 || pendingComponentDeletes.size > 0;
   }
 
   function removePluginComponents(pluginId: string) {
@@ -266,8 +311,6 @@ export const usePluginStore = defineStore("plugin", () => {
         );
         await loadNavItems();
 
-        const currentPath = window.location.hash.replace(/^#/, "") || "/";
-        await pluginApi.onPageChanged(currentPath);
         await replayUiSnapshot();
         setTimeout(() => replayUiSnapshot(), 300);
 
@@ -353,8 +396,38 @@ export const usePluginStore = defineStore("plugin", () => {
   }
 
   function collectSidebarItems() {
-    // 已禁用插件注册的侧栏按钮功能
-    sidebarItems.value = [];
+    const items: SidebarItem[] = [];
+
+    for (const plugin of plugins.value) {
+      if (plugin.state !== "enabled") continue;
+
+      // 从 manifest.sidebar 读取侧栏配置
+      const sidebarConfig = plugin.manifest.sidebar;
+      if (sidebarConfig) {
+        items.push({
+          pluginId: plugin.manifest.id,
+          label: sidebarConfig.label,
+          icon: sidebarConfig.icon,
+          mode: sidebarConfig.mode ?? "self",
+          showDependents: sidebarConfig.show_dependents ?? true,
+          priority: sidebarConfig.priority ?? 100,
+          isDefault: true,
+          after: sidebarConfig.after,
+          parent: sidebarConfig.parent,
+        });
+      }
+    }
+
+    // 合并运行时通过 sl.ui.register_sidebar 注册的项
+    const existingIds = new Set(items.map((i) => i.pluginId));
+    for (const existing of sidebarItems.value) {
+      if (!existingIds.has(existing.pluginId)) {
+        items.push(existing);
+      }
+    }
+
+    items.sort((a, b) => a.priority - b.priority);
+    sidebarItems.value = items;
   }
 
   async function installFromZip(zipPath: string): Promise<PluginInstallResult> {
@@ -925,6 +998,62 @@ export const usePluginStore = defineStore("plugin", () => {
         break;
       }
 
+      case "element_exists": {
+        if (!target) break;
+        try {
+          const parsed = JSON.parse(html || "{}");
+          const requestId = parsed.request_id;
+          const exists = document.querySelector(target) !== null;
+          emit("plugin-element-response", {
+            plugin_id,
+            request_id: requestId,
+            data: exists ? "true" : "false",
+          });
+        } catch (e) {
+          console.error("[PluginUI] element_exists error:", e);
+        }
+        break;
+      }
+
+      case "element_is_visible": {
+        if (!target) break;
+        try {
+          const parsed = JSON.parse(html || "{}");
+          const requestId = parsed.request_id;
+          const el = document.querySelector(target) as HTMLElement | null;
+          const isVisible =
+            !!el &&
+            el.isConnected &&
+            !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+          emit("plugin-element-response", {
+            plugin_id,
+            request_id: requestId,
+            data: isVisible ? "true" : "false",
+          });
+        } catch (e) {
+          console.error("[PluginUI] element_is_visible error:", e);
+        }
+        break;
+      }
+
+      case "element_is_enabled": {
+        if (!target) break;
+        try {
+          const parsed = JSON.parse(html || "{}");
+          const requestId = parsed.request_id;
+          const el = document.querySelector(target) as HTMLElement | null;
+          const isEnabled = !!el && !el.hasAttribute("disabled");
+          emit("plugin-element-response", {
+            plugin_id,
+            request_id: requestId,
+            data: isEnabled ? "true" : "false",
+          });
+        } catch (e) {
+          console.error("[PluginUI] element_is_enabled error:", e);
+        }
+        break;
+      }
+
       case "element_get_text": {
         if (!target) break;
         try {
@@ -1081,6 +1210,17 @@ export const usePluginStore = defineStore("plugin", () => {
         if (!target) break;
         const el = document.querySelector(target) as HTMLElement | null;
         if (el) {
+          const listeners = eventListenerRegistry.get(plugin_id) ?? [];
+          listeners
+            .filter((entry) => entry.eventType === "change" && entry.element === el)
+            .forEach((entry) => {
+              entry.element.removeEventListener(entry.eventType, entry.handler);
+            });
+
+          const nextListeners = listeners.filter(
+            (entry) => !(entry.eventType === "change" && entry.element === el),
+          );
+
           const handler = (e: Event) => {
             const value = (e.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement)
               .value;
@@ -1093,10 +1233,81 @@ export const usePluginStore = defineStore("plugin", () => {
           };
           el.addEventListener("change", handler);
 
-          if (!eventListenerRegistry.has(plugin_id)) {
-            eventListenerRegistry.set(plugin_id, []);
+          nextListeners.push({ element: el, eventType: "change", handler });
+          eventListenerRegistry.set(plugin_id, nextListeners);
+        }
+        break;
+      }
+
+      case "element_off_change": {
+        if (!target) break;
+        const listeners = eventListenerRegistry.get(plugin_id);
+        if (!listeners) break;
+
+        const remaining = listeners.filter((entry) => {
+          const shouldRemove = entry.eventType === "change" && entry.element.matches(target);
+          if (shouldRemove) {
+            entry.element.removeEventListener(entry.eventType, entry.handler);
           }
-          eventListenerRegistry.get(plugin_id)!.push({ element: el, eventType: "change", handler });
+          return !shouldRemove;
+        });
+
+        if (remaining.length === 0) {
+          eventListenerRegistry.delete(plugin_id);
+        } else {
+          eventListenerRegistry.set(plugin_id, remaining);
+        }
+        break;
+      }
+
+      case "element_form_fill": {
+        if (!target) break;
+        try {
+          const payload = JSON.parse(html || "{}");
+          const form = document.querySelector(target);
+          const fields = payload.fields as Record<string, unknown> | undefined;
+          if (!form || !fields || typeof fields !== "object") {
+            break;
+          }
+
+          Object.entries(fields).forEach(([name, value]) => {
+            const cssApi = window as Window & { CSS?: { escape?: (input: string) => string } };
+            const escapedName = cssApi.CSS?.escape?.(name);
+            const selector = escapedName
+              ? `[name="${escapedName}"]`
+              : `[name="${name.replace(/"/g, '\\"')}"]`;
+            const matches = Array.from(form.querySelectorAll(selector));
+
+            if (matches.length === 0) {
+              return;
+            }
+
+            if (Array.isArray(value)) {
+              matches.forEach((field) => {
+                if (field instanceof HTMLInputElement && field.type.toLowerCase() === "checkbox") {
+                  field.checked = value.some((item) => String(item) === field.value);
+                  field.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+              });
+              return;
+            }
+
+            if (
+              matches.some(
+                (field) =>
+                  field instanceof HTMLInputElement && field.type.toLowerCase() === "radio",
+              )
+            ) {
+              matches.forEach((field) => {
+                setFormFieldValue(field, value);
+              });
+              return;
+            }
+
+            setFormFieldValue(matches[0], value);
+          });
+        } catch (e) {
+          console.error("[PluginUI] element_form_fill error:", e);
         }
         break;
       }
@@ -1163,8 +1374,14 @@ export const usePluginStore = defineStore("plugin", () => {
   }
 
   let uiEventUnlisten: UnlistenFn | null = null;
+  let sidebarEventUnlisten: UnlistenFn | null = null;
 
   async function initUiEventListener() {
+    // 浏览器环境不支持 Tauri 事件系统
+    if (isBrowserEnv()) {
+      return;
+    }
+
     if (uiEventUnlisten) {
       return;
     }
@@ -1187,14 +1404,44 @@ export const usePluginStore = defineStore("plugin", () => {
     }
   }
 
-  function initSidebarEventListener() {
-    console.log("[PluginSidebar] Event listener disabled");
-  }
-
   function cleanupSidebarEventListener() {
     if (sidebarEventUnlisten) {
       sidebarEventUnlisten();
       sidebarEventUnlisten = null;
+    }
+  }
+
+  async function initSidebarEventListener() {
+    if (isBrowserEnv()) {
+      return;
+    }
+
+    if (sidebarEventUnlisten) {
+      return;
+    }
+
+    try {
+      sidebarEventUnlisten = await listen<PluginSidebarEvent>("plugin-sidebar-event", (event) => {
+        const { plugin_id, action, label, icon } = event.payload;
+        if (action === "register") {
+          const filtered = sidebarItems.value.filter((item) => item.pluginId !== plugin_id);
+          filtered.push({
+            pluginId: plugin_id,
+            label,
+            icon: icon || undefined,
+            mode: "self",
+            showDependents: true,
+            priority: 100,
+          });
+          filtered.sort((a, b) => a.priority - b.priority);
+          sidebarItems.value = filtered;
+        } else if (action === "unregister") {
+          sidebarItems.value = sidebarItems.value.filter((item) => item.pluginId !== plugin_id);
+        }
+      });
+      console.log("[PluginSidebar] Event listener initialized");
+    } catch (e) {
+      console.error("[PluginSidebar] Failed to initialize event listener:", e);
     }
   }
 
@@ -1204,7 +1451,7 @@ export const usePluginStore = defineStore("plugin", () => {
     const logs = permissionLogs.value[log.plugin_id] || [];
     const newLogs = [...logs, log];
 
-    if (newLogs.length > 200) newLogs.shift();
+    if (newLogs.length > 500) newLogs.splice(0, newLogs.length - 500);
     permissionLogs.value = {
       ...permissionLogs.value,
       [log.plugin_id]: newLogs,
@@ -1252,6 +1499,11 @@ export const usePluginStore = defineStore("plugin", () => {
   }
 
   async function initPermissionLogListener() {
+    // 浏览器环境不支持 Tauri 事件系统
+    if (isBrowserEnv()) {
+      return;
+    }
+
     if (permissionLogUnlisten) {
       return;
     }
@@ -1281,6 +1533,11 @@ export const usePluginStore = defineStore("plugin", () => {
   let pluginLogUnlisten: UnlistenFn | null = null;
 
   async function initPluginLogListener() {
+    // 浏览器环境不支持 Tauri 事件系统
+    if (isBrowserEnv()) {
+      return;
+    }
+
     if (pluginLogUnlisten) {
       return;
     }
@@ -1430,6 +1687,11 @@ export const usePluginStore = defineStore("plugin", () => {
   let componentEventUnlisten: UnlistenFn | null = null;
 
   async function initComponentEventListener() {
+    // 浏览器环境不支持 Tauri 事件系统
+    if (isBrowserEnv()) {
+      return;
+    }
+
     if (componentEventUnlisten) return;
     try {
       componentEventUnlisten = await listen<PluginComponentEvent>("plugin:ui:component", (e) => {
@@ -1475,6 +1737,11 @@ export const usePluginStore = defineStore("plugin", () => {
   let i18nEventUnlisten: UnlistenFn | null = null;
 
   async function initI18nEventListener() {
+    // 浏览器环境不支持 Tauri 事件系统
+    if (isBrowserEnv()) {
+      return;
+    }
+
     if (i18nEventUnlisten) return;
     try {
       i18nEventUnlisten = await listen<{
@@ -1587,7 +1854,6 @@ export const usePluginStore = defineStore("plugin", () => {
         console.log(
           `[ContextMenu] Replaying ${contextMenuSnapshot.length} buffered context menu events`,
         );
-        const { useContextMenuStore } = await import("@stores/contextMenuStore");
         const contextMenuStore = useContextMenuStore();
         for (const event of contextMenuSnapshot) {
           contextMenuStore.handleContextMenuEvent({
@@ -1600,6 +1866,28 @@ export const usePluginStore = defineStore("plugin", () => {
       }
     } catch (e) {
       console.error("[ContextMenu] Failed to replay context menu snapshot:", e);
+    }
+    try {
+      const permissionLogEntries = await Promise.all(
+        plugins.value.map(
+          async (plugin) =>
+            [
+              plugin.manifest.id,
+              await pluginApi.getPluginPermissionLogs(plugin.manifest.id),
+            ] as const,
+        ),
+      );
+
+      const nextPermissionLogs: Record<string, PluginPermissionLog[]> = {};
+      for (const [pluginId, logs] of permissionLogEntries) {
+        nextPermissionLogs[pluginId] = logs.slice(-500);
+      }
+      permissionLogs.value = {
+        ...permissionLogs.value,
+        ...nextPermissionLogs,
+      };
+    } catch (e) {
+      console.error("[PluginPermission] Failed to replay permission log snapshot:", e);
     }
   }
 
@@ -1660,6 +1948,7 @@ export const usePluginStore = defineStore("plugin", () => {
     removePluginComponents,
     consumePendingComponentCreates,
     consumePendingComponentDeletes,
+    hasPendingComponents,
 
     initI18nEventListener,
     cleanupI18nEventListener,

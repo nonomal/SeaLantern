@@ -1,4 +1,5 @@
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onActivated, onMounted, onUnmounted, ref, watch } from "vue";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRouter } from "vue-router";
 import { appendCustomCandidate } from "@components/views/create/createServerWorkflow";
 import type { StartupCandidate } from "@components/views/create/startupTypes";
@@ -13,22 +14,69 @@ import { javaApi } from "@api/java";
 import { serverApi } from "@api/server";
 import { settingsApi } from "@api/settings";
 import { systemApi } from "@api/system";
-import { useMessage } from "@composables/useMessage";
+import { downloadServerApi } from "@api/downloader";
+import { useToast } from "cmzya-modern-ui";
 import { useLoading } from "@composables/useAsync";
 import { i18n } from "@language";
 import { useServerStore } from "@stores/serverStore";
+import { useDownloadStore } from "@stores/downloadStore";
+import { useCreateServerDraftStore } from "@stores/createServerDraft.ts";
+import { isBrowserEnv } from "@api/tauri";
 
-type SourceType = "archive" | "folder" | "";
+// UUID 生成函数（用于前端备用方案）
+function generateUUID(): string {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+type SourceType = "archive" | "folder" | "download" | "";
+
+function inferSourceType(path: string): SourceType {
+  const lowerPath = path.toLowerCase();
+  if (
+    lowerPath.endsWith(".zip") ||
+    lowerPath.endsWith(".tar") ||
+    lowerPath.endsWith(".tar.gz") ||
+    lowerPath.endsWith(".tgz") ||
+    lowerPath.endsWith(".jar")
+  ) {
+    return "archive";
+  }
+  return "folder";
+}
+
+function parseNumber(value: string, fallbackValue: number): number {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? fallbackValue : parsed;
+}
+
+export const CREATE_SERVER_SOURCE_DROP_EVENT = "create-server-source-drop";
+const CREATE_SERVER_DND_DEBUG = import.meta.env.DEV;
+
+function logCreateServerDnd(message: string, payload?: unknown) {
+  if (!CREATE_SERVER_DND_DEBUG) return;
+  if (payload === undefined) {
+    console.debug(message);
+    return;
+  }
+  console.debug(message, payload);
+}
 
 export function useCreateServerPage() {
   const router = useRouter();
-  const store = useServerStore();
-  const { error: errorMsg, showError, clearError } = useMessage();
+  const serverstore = useServerStore();
+  const downloadStore = useDownloadStore();
+  const toast = useToast();
   const { loading: javaLoading, start: startJavaLoading, stop: stopJavaLoading } = useLoading();
   const { loading: creating, start: startCreating, stop: stopCreating } = useLoading();
 
   const sourcePath = ref("");
   const sourceType = ref<SourceType>("");
+  const serverDownloadType = ref("");
+  const serverDownloadVersion = ref("");
   const runPath = ref("");
 
   const coreDetecting = ref(false);
@@ -53,11 +101,29 @@ export function useCreateServerPage() {
 
   const AUTO_SCAN_DEBOUNCE_MS = 120;
   let startupDetectTimer: ReturnType<typeof setTimeout> | null = null;
+  let unlistenSourceDropEvent: UnlistenFn | null = null;
 
   const runPathOverwriteRisk = ref(false);
   const RUN_PATH_CONFLICT_DEBOUNCE_MS = 180;
   let runPathConflictTimer: ReturnType<typeof setTimeout> | null = null;
   let runPathConflictRequestId = 0;
+
+  // 下载等待轮询句柄与取消回调:离开页面时中止等待
+  let downloadWaitTimer: ReturnType<typeof setInterval> | null = null;
+  let downloadWaitReject: ((reason: Error) => void) | null = null;
+
+  // 中止下载等待:清理定时器并 reject Promise,避免组件卸载后定时器残留
+  function downloadWaitResolved() {
+    if (downloadWaitTimer) {
+      clearInterval(downloadWaitTimer);
+      downloadWaitTimer = null;
+    }
+    if (downloadWaitReject) {
+      const reject = downloadWaitReject;
+      downloadWaitReject = null;
+      reject(new Error(i18n.t("downloadServerView.status.cancelled")));
+    }
+  }
 
   const serverName = ref("My Server");
   const maxMemory = ref("2048");
@@ -67,7 +133,14 @@ export function useCreateServerPage() {
   const onlineMode = ref(true);
   const javaList = ref<JavaInfo[]>([]);
 
-  const hasSource = computed(() => sourcePath.value.trim().length > 0 && sourceType.value !== "");
+  const hasSource = computed(() => {
+    if (sourceType.value === "download")
+      return !!(serverDownloadType.value && serverDownloadVersion.value);
+    return sourcePath.value.trim().length > 0 && sourceType.value !== "";
+  });
+
+  // 下载模式标记
+  const isDownloadMode = computed(() => sourceType.value === "download");
 
   const selectedStartup = computed(
     () => startupCandidates.value.find((item) => item.id === selectedStartupId.value) ?? null,
@@ -86,20 +159,18 @@ export function useCreateServerPage() {
   });
 
   const hasStartupStep = computed(() => {
-    if (!hasPathStep.value || !selectedStartup.value) {
-      return false;
-    }
+    if (!hasPathStep.value) return false;
+    // 下载模式下自动使用 jar 启动模式
+    if (isDownloadMode.value) return true;
+    if (!selectedStartup.value) return false;
     if (selectedStartup.value.mode === "custom") {
       return customStartupCommand.value.trim().length > 0 && !customCommandHasRedirect.value;
     }
-    if (
+    return !(
       selectedStartup.value.mode === "starter" &&
       mcVersionDetectionFailed.value &&
       selectedMcVersion.value.trim().length === 0
-    ) {
-      return false;
-    }
-    return true;
+    );
   });
 
   const hasJava = computed(() => selectedJava.value.trim().length > 0);
@@ -166,8 +237,33 @@ export function useCreateServerPage() {
     () => step4Completed.value && !startupSyncPending.value && !startupDetecting.value,
   );
 
+  onActivated(() => {
+    loadFromDraft();
+  });
+
   onMounted(async () => {
     await loadDefaultSettings();
+
+    if (!isBrowserEnv()) {
+      try {
+        unlistenSourceDropEvent = await listen<string[]>(
+          CREATE_SERVER_SOURCE_DROP_EVENT,
+          (event) => {
+            const droppedPaths = Array.isArray(event.payload) ? event.payload : [];
+            logCreateServerDnd("[useCreateServerPage] Received source drop event", droppedPaths);
+            if (droppedPaths.length === 0) {
+              return;
+            }
+
+            const path = droppedPaths[0];
+            sourcePath.value = path;
+            sourceType.value = inferSourceType(path);
+          },
+        );
+      } catch (error) {
+        logCreateServerDnd("[useCreateServerPage] Failed to register source drop listener", error);
+      }
+    }
   });
 
   onUnmounted(() => {
@@ -179,6 +275,12 @@ export function useCreateServerPage() {
       clearTimeout(runPathConflictTimer);
       runPathConflictTimer = null;
     }
+    if (unlistenSourceDropEvent) {
+      unlistenSourceDropEvent();
+      unlistenSourceDropEvent = null;
+    }
+    // 下载等待轮询:离开页面时中止,避免定时器残留直到下载结束
+    downloadWaitResolved();
   });
 
   function scheduleRunPathConflictCheck() {
@@ -238,6 +340,32 @@ export function useCreateServerPage() {
       startupDetectTimer = null;
     }
 
+    // 下载模式下跳过启动项扫描，使用默认 jar 启动
+    if (type === "download") {
+      startupSyncPending.value = false;
+      startupDetecting.value = false;
+      coreDetecting.value = false;
+      startupCandidates.value = [
+        {
+          id: "jar-direct",
+          mode: "jar",
+          label: i18n.t("create.startup_candidate_jar"),
+          detail: serverDownloadType.value || i18n.t("create.source_core_unknown"),
+          path: "",
+          recommended: 0,
+        },
+      ];
+      selectedStartupId.value = "jar-direct";
+      detectedCoreTypeKey.value = serverDownloadType.value;
+      coreTypeOptions.value = [serverDownloadType.value];
+      selectedCoreType.value = serverDownloadType.value;
+      detectedMcVersion.value = serverDownloadVersion.value;
+      mcVersionOptions.value = [serverDownloadVersion.value];
+      selectedMcVersion.value = serverDownloadVersion.value;
+      mcVersionDetectionFailed.value = false;
+      return;
+    }
+
     if (!path.trim() || !type) {
       startupSyncPending.value = false;
       void refreshStartupCandidates(path, type, false);
@@ -261,11 +389,6 @@ export function useCreateServerPage() {
     { immediate: true },
   );
 
-  function parseNumber(value: string, fallbackValue: number): number {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackValue;
-  }
-
   async function loadDefaultSettings() {
     try {
       const settings = await settingsApi.get();
@@ -274,16 +397,30 @@ export function useCreateServerPage() {
       minMemory.value = String(settings.default_min_memory);
       port.value = String(settings.default_port);
 
-      // 加载上次选择的开服路径
-      if (settings.last_run_path) {
-        runPath.value = settings.last_run_path;
-      } else {
-        // 如果没有上次的路径，获取默认路径
+      // Docker 环境下强制使用默认路径，忽略已保存的路径设置
+      if (isBrowserEnv()) {
         try {
           const defaultPath = await systemApi.getDefaultRunPath();
-          runPath.value = defaultPath;
+          // 在Docker环境下，生成UUID并显示完整路径
+          const uuid = generateUUID().replace(/-/g, "").substring(0, 30);
+          runPath.value = `${defaultPath}/${uuid}`;
         } catch (error) {
           console.error("Failed to get default run path:", error);
+          // 即使API调用失败，也设置一个合理的默认值
+          const uuid = generateUUID().replace(/-/g, "").substring(0, 30);
+          runPath.value = `./data/${uuid}`;
+        }
+      } else {
+        // 非 Docker 环境下加载上次选择的开服路径
+        if (settings.last_run_path) {
+          runPath.value = settings.last_run_path;
+        } else {
+          // 如果没有上次的路径，获取默认路径
+          try {
+            runPath.value = await systemApi.getDefaultRunPath();
+          } catch (error) {
+            console.error("Failed to get default run path:", error);
+          }
         }
       }
 
@@ -303,6 +440,15 @@ export function useCreateServerPage() {
     }
   }
 
+  function loadFromDraft() {
+    const draftStore = useCreateServerDraftStore();
+    const draft = draftStore.consumeDraft();
+    if (draft !== null) {
+      sourcePath.value = draft.sourcePath;
+      sourceType.value = draft.sourceType;
+    }
+  }
+
   async function detectJava() {
     startJavaLoading();
     try {
@@ -318,13 +464,36 @@ export function useCreateServerPage() {
       settings.cached_java_list = javaList.value;
       await settingsApi.save(settings);
     } catch (error) {
-      showError(String(error));
+      toast.error(String(error));
     } finally {
       stopJavaLoading();
     }
   }
 
   async function pickRunPath() {
+    // Docker 环境下禁用文件选择器，使用默认路径
+    if (isBrowserEnv()) {
+      try {
+        const defaultPath = await systemApi.getDefaultRunPath();
+        // 在Docker环境下，生成UUID并显示完整路径
+        const uuid = generateUUID().replace(/-/g, "").substring(0, 30);
+        const fullPath = `${defaultPath}/${uuid}`;
+        updateRunPath(fullPath);
+        // 保存选择的开服路径
+        try {
+          await settingsApi.updatePartial({ last_run_path: fullPath });
+        } catch (error) {
+          console.error("Failed to save last run path:", error);
+        }
+      } catch (error) {
+        console.error("Failed to get default run path:", error);
+        // 即使API调用失败，也设置一个合理的默认值（包含UUID）
+        const uuid = generateUUID().replace(/-/g, "").substring(0, 30);
+        updateRunPath(`./data/${uuid}`);
+      }
+      return;
+    }
+
     const selected = await systemApi.pickFolder();
     if (selected) {
       updateRunPath(selected);
@@ -340,7 +509,7 @@ export function useCreateServerPage() {
   function updateRunPath(nextPath: string) {
     const targetPath = nextPath.trim();
     if (sourceType.value === "folder" && isStrictChildPath(targetPath, sourcePath.value)) {
-      showError(i18n.t("create.path_child_of_source_forbidden"));
+      toast.error(i18n.t("create.path_child_of_source_forbidden"));
       return;
     }
 
@@ -388,10 +557,13 @@ export function useCreateServerPage() {
       detectedCoreMainClass.value = discovered.parsedCore.mainClass ?? "";
       const previousDetectedCoreKey = detectedCoreTypeKey.value;
       const previousDetectedMcVersion = detectedMcVersion.value;
-      detectedCoreTypeKey.value = discovered.detectedCoreTypeKey ?? "";
-      coreTypeOptions.value = discovered.coreTypeOptions;
-      detectedMcVersion.value = discovered.detectedMcVersion ?? "";
-      mcVersionOptions.value = discovered.mcVersionOptions;
+      // 后端可能返回嵌套对象而非纯字符串，统一归一化为字符串避免污染后续状态
+      detectedCoreTypeKey.value =
+        discovered.detectedCoreTypeKey == null ? "" : String(discovered.detectedCoreTypeKey);
+      coreTypeOptions.value = discovered.coreTypeOptions.map((opt) => String(opt));
+      detectedMcVersion.value =
+        discovered.detectedMcVersion == null ? "" : String(discovered.detectedMcVersion);
+      mcVersionOptions.value = discovered.mcVersionOptions.map((ver) => String(ver));
       mcVersionDetectionFailed.value = discovered.mcVersionDetectionFailed;
       startupCandidates.value = list;
 
@@ -429,7 +601,7 @@ export function useCreateServerPage() {
       mcVersionOptions.value = [];
       selectedMcVersion.value = "";
       mcVersionDetectionFailed.value = false;
-      showError(String(error));
+      toast.error(String(error));
     } finally {
       if (requestId === startupDetectRequestId) {
         coreDetecting.value = false;
@@ -444,32 +616,30 @@ export function useCreateServerPage() {
   }
 
   function validateBeforeSubmit(): boolean {
-    clearError();
-
     if (!hasSource.value) {
-      showError(i18n.t("create.source_required"));
+      toast.error(i18n.t("create.source_required"));
       return false;
     }
     if (runPath.value.trim().length === 0) {
-      showError(i18n.t("create.path_required"));
+      toast.error(i18n.t("create.path_required"));
       return false;
     }
     if (sourceType.value === "folder" && isStrictChildPath(runPath.value, sourcePath.value)) {
-      showError(i18n.t("create.path_child_of_source_forbidden"));
+      toast.error(i18n.t("create.path_child_of_source_forbidden"));
       return false;
     }
     if (!selectedStartup.value) {
-      showError(i18n.t("create.startup_required"));
+      toast.error(i18n.t("create.startup_required"));
       return false;
     }
 
     if (selectedStartup.value.mode === "custom") {
       if (!customStartupCommand.value.trim()) {
-        showError(i18n.t("create.startup_custom_required"));
+        toast.error(i18n.t("create.startup_custom_required"));
         return false;
       }
       if (containsIoRedirection(customStartupCommand.value)) {
-        showError(i18n.t("create.startup_custom_redirect_forbidden"));
+        toast.error(i18n.t("create.startup_custom_redirect_forbidden"));
         return false;
       }
     }
@@ -479,16 +649,16 @@ export function useCreateServerPage() {
       mcVersionDetectionFailed.value &&
       selectedMcVersion.value.trim().length === 0
     ) {
-      showError(i18n.t("create.startup_mc_version_required"));
+      toast.error(i18n.t("create.startup_mc_version_required"));
       return false;
     }
 
     if (!selectedJava.value) {
-      showError(i18n.t("common.select_java_path"));
+      toast.error(i18n.t("common.select_java_path"));
       return false;
     }
     if (!serverName.value.trim()) {
-      showError(i18n.t("common.enter_server_name"));
+      toast.error(i18n.t("common.enter_server_name"));
       return false;
     }
 
@@ -501,13 +671,101 @@ export function useCreateServerPage() {
     }
 
     startCreating();
+
+    // 临时下载文件路径（下载模式下使用）
+    let tempDownloadPath: string | null = null;
+    let scannedStartup = selectedStartup.value;
+    let scannedStartupMode = mapStartupModeForModpack(selectedStartup.value?.mode ?? "jar");
+    let scannedCoreType =
+      String(selectedCoreType.value ?? "").trim() || String(detectedCoreTypeKey.value ?? "").trim();
+    let scannedMcVersion =
+      scannedStartupMode === "starter"
+        ? selectedMcVersion.value.trim() || detectedMcVersion.value.trim()
+        : "";
+
     try {
-      const startup = selectedStartup.value;
-      const startupMode = mapStartupModeForModpack(startup?.mode ?? "jar");
-      const resolvedCoreType = selectedCoreType.value.trim() || detectedCoreTypeKey.value.trim();
+      // 下载模式：先下载服务端到临时目录，再扫描启动项
+      if (isDownloadMode.value) {
+        try {
+          const info = await downloadServerApi.getDownloadInfo(
+            serverDownloadType.value,
+            serverDownloadVersion.value,
+          );
+          const defaultPath = await systemApi.getDefaultRunPath();
+          const tempDir = `${defaultPath.replace(/[\\/]+$/, "").replace(/\\/g, "/")}/temp`;
+          const fileName = info.fileName || "server.jar";
+          tempDownloadPath = `${tempDir}/${fileName}`;
+
+          // 走全局下载 store，顶栏任务球才能显示下载进度
+          await downloadStore.startTask(
+            {
+              url: info.url,
+              save_path: tempDownloadPath,
+              thread_count: 32,
+            },
+            { filename: fileName, savePath: tempDownloadPath, origin: "server" },
+          );
+
+          // 等待下载完成
+          await new Promise<void>((resolve, reject) => {
+            downloadWaitReject = reject;
+            const checkInterval = setInterval(() => {
+              if (downloadStore.isFinished) {
+                clearInterval(checkInterval);
+                downloadWaitTimer = null;
+                downloadWaitReject = null;
+                if (downloadStore.isError) {
+                  reject(
+                    new Error(
+                      downloadStore.taskError || i18n.t("downloadServerView.status.failed"),
+                    ),
+                  );
+                } else {
+                  resolve();
+                }
+              }
+            }, 300);
+            downloadWaitTimer = checkInterval;
+          });
+
+          // 下载完成，扫描启动项
+          sourcePath.value = tempDownloadPath;
+          sourceType.value = "archive";
+
+          try {
+            const discovered = await serverApi.scanStartupCandidates(tempDownloadPath, "archive");
+            const bestCandidate = discovered.candidates[0];
+            if (bestCandidate) {
+              scannedStartup = bestCandidate;
+              scannedStartupMode = mapStartupModeForModpack(bestCandidate.mode);
+            }
+            scannedCoreType = discovered.detectedCoreTypeKey || serverDownloadType.value;
+            if (scannedStartupMode === "starter") {
+              scannedMcVersion = discovered.detectedMcVersion || serverDownloadVersion.value;
+            }
+          } catch {
+            // 扫描失败，使用推断的默认参数
+            scannedStartupMode = "jar";
+            scannedCoreType = serverDownloadType.value;
+          }
+        } catch (downloadError) {
+          toast.error(String(downloadError));
+          stopCreating();
+          return;
+        }
+      }
+
+      const startupMode = isDownloadMode.value
+        ? scannedStartupMode
+        : mapStartupModeForModpack(scannedStartup?.mode ?? "jar");
+      const resolvedCoreType = isDownloadMode.value
+        ? scannedCoreType
+        : selectedCoreType.value.trim() || detectedCoreTypeKey.value.trim();
       const resolvedMcVersion =
         startupMode === "starter"
-          ? selectedMcVersion.value.trim() || detectedMcVersion.value.trim()
+          ? isDownloadMode.value
+            ? scannedMcVersion
+            : selectedMcVersion.value.trim() || detectedMcVersion.value.trim()
           : "";
       await serverApi.importModpack({
         name: serverName.value.trim(),
@@ -520,28 +778,67 @@ export function useCreateServerPage() {
         onlineMode: onlineMode.value,
         customCommand: startupMode === "custom" ? customStartupCommand.value.trim() : undefined,
         runPath: runPath.value.trim(),
-        startupFilePath: startupMode === "custom" ? undefined : startup?.path,
+        startupFilePath:
+          startupMode === "custom"
+            ? undefined
+            : isDownloadMode.value
+              ? scannedStartup?.path
+              : scannedStartup?.path,
         coreType: resolvedCoreType || undefined,
         mcVersion: resolvedMcVersion || undefined,
       });
 
-      await store.refreshList();
+      // 创建成功后清理临时下载文件
+      if (tempDownloadPath) {
+        try {
+          await systemApi.removeFile(tempDownloadPath);
+        } catch (e) {
+          // 清理失败不影响主流程,仅 DEV 环境记录
+          if (import.meta.env.DEV) console.warn("Failed to clean temp download:", e);
+        }
+      }
+
+      await serverstore.refreshList();
       router.push("/");
     } catch (error) {
-      showError(String(error));
+      toast.error(String(error));
     } finally {
       stopCreating();
     }
   }
 
+  /**
+   * 处理 Tauri 文件拖放事件
+   * 根据文件扩展名自动识别为压缩包或文件夹
+   */
+  function handleTauriDrop(paths: string[]) {
+    if (paths.length === 0) return;
+
+    const archiveExtensions = [".zip", ".tar", ".tar.gz", ".tgz", ".jar"];
+
+    function hasArchiveExtension(path: string): boolean {
+      const lowerPath = path.toLowerCase();
+      return archiveExtensions.some((ext) => lowerPath.endsWith(ext));
+    }
+
+    const firstPath = paths[0];
+    if (hasArchiveExtension(firstPath)) {
+      sourcePath.value = firstPath;
+      sourceType.value = "archive";
+    } else {
+      sourcePath.value = firstPath;
+      sourceType.value = "folder";
+    }
+  }
+
   return {
-    errorMsg,
-    clearError,
-    showError,
     javaLoading,
     creating,
     sourcePath,
     sourceType,
+    serverDownloadType,
+    serverDownloadVersion,
+    isDownloadMode,
     runPath,
     runPathOverwriteRisk,
     coreDetecting,
@@ -575,5 +872,6 @@ export function useCreateServerPage() {
     rescanStartupCandidates,
     detectJava,
     handleSubmit,
+    handleTauriDrop,
   };
 }

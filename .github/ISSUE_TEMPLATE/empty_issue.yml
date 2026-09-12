@@ -1,0 +1,12 @@
+name: 空白模板
+description: 不确定模板时，可以使用此模板自行填写内容
+labels: ["pending"]
+body:
+  - type: textarea
+    id: content
+    attributes:
+      label: 内容
+      description: 请填写具体内容
+      placeholder: 在这里填写内容
+    validations:
+      required: true

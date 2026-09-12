@@ -1,23 +1,16 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, computed, watch } from "vue";
+import { onMounted, onUnmounted, computed } from "vue";
 import AppSidebar from "@components/layout/AppSidebar.vue";
 import AppHeader from "@components/layout/AppHeader.vue";
-import { useUiStore } from "@stores/uiStore";
 import {
   useSettingsStore,
   SETTINGS_UPDATE_EVENT,
   type SettingsUpdateEvent,
 } from "@stores/settingsStore";
-import {
-  applyTheme,
-  applyFontFamily,
-  applyFontSize,
-  applyColors,
-  applyDeveloperMode,
-  isThemeProviderActive,
-} from "@utils/theme";
+import { applyDeveloperMode } from "@utils/theme";
+import { enqueueAppearanceApply } from "@utils/appearance";
+import { isMacOSPlatform } from "@utils/platform";
 
-const ui = useUiStore();
 const settingsStore = useSettingsStore();
 
 const backgroundImage = computed(() => settingsStore.backgroundImage);
@@ -25,34 +18,13 @@ const backgroundOpacity = computed(() => settingsStore.backgroundOpacity);
 const backgroundBlur = computed(() => settingsStore.backgroundBlur);
 const backgroundBrightness = computed(() => settingsStore.backgroundBrightness);
 const backgroundSize = computed(() => settingsStore.backgroundSize);
+const isMacOS = isMacOSPlatform();
 
 let systemThemeQuery: MediaQueryList | null = null;
 
-function applyAcrylicEffect(enabled: boolean): void {
-  document.documentElement.setAttribute("data-acrylic", enabled ? "true" : "false");
-}
-
 function handleSystemThemeChange(): void {
-  const settings = settingsStore.settings;
-  if (settings.theme === "auto") {
-    applyTheme("auto");
-    if (!isThemeProviderActive()) {
-      applyColors(settings);
-    }
-  }
-}
-
-async function applyAppearanceSettings(): Promise<void> {
-  const settings = settingsStore.settings;
-
-  applyTheme(settings.theme || "auto");
-  applyFontSize(settings.font_size || 14);
-  applyFontFamily(settings.font_family || "");
-
-  applyAcrylicEffect(settings.acrylic_enabled);
-
-  if (!isThemeProviderActive()) {
-    applyColors(settings);
+  if (settingsStore.settings.theme === "auto") {
+    void enqueueAppearanceApply(settingsStore.settings);
   }
 }
 
@@ -61,7 +33,7 @@ function applyDeveloperSettings(): void {
 }
 
 async function applyAllSettings(): Promise<void> {
-  await applyAppearanceSettings();
+  await enqueueAppearanceApply(settingsStore.settings);
   applyDeveloperSettings();
 }
 
@@ -70,7 +42,7 @@ function handleSettingsUpdateEvent(e: CustomEvent<SettingsUpdateEvent>): void {
   settingsStore.settings = settings;
 
   if (changedGroups.includes("Appearance")) {
-    applyAppearanceSettings();
+    void enqueueAppearanceApply(settings);
   }
   if (changedGroups.includes("Developer")) {
     applyDeveloperSettings();
@@ -95,30 +67,32 @@ onUnmounted(() => {
 
 const backgroundStyle = computed(() => {
   if (!backgroundImage.value) return {};
-  return {
+  const style: Record<string, string | number> = {
     backgroundImage: `url(${backgroundImage.value})`,
     backgroundSize: backgroundSize.value,
     backgroundPosition: "center",
     backgroundRepeat: "no-repeat",
     opacity: backgroundOpacity.value,
-    filter: `blur(${backgroundBlur.value}px) brightness(${backgroundBrightness.value})`,
   };
+  // blur=0 且 brightness=1 时不挂 filter,避免无意义的全屏重采样层
+  if (backgroundBlur.value > 0 || backgroundBrightness.value !== 1) {
+    style.filter = `blur(${backgroundBlur.value}px) brightness(${backgroundBrightness.value})`;
+  }
+  return style;
 });
 </script>
 
 <template>
-  <div class="app-layout">
+  <div class="app-layout" :class="{ 'macos-native-vibrancy': isMacOS }">
     <div class="app-background" :style="backgroundStyle"></div>
     <AppSidebar />
-    <div class="app-main" :class="{ 'sidebar-collapsed': ui.sidebarCollapsed }">
+    <div class="app-main" :class="{ 'macos-native-vibrancy': isMacOS }">
       <AppHeader />
       <main class="app-content">
         <router-view v-slot="{ Component }">
-          <transition name="page-fade" mode="out-in">
-            <keep-alive :max="5">
-              <component :is="Component" />
-            </keep-alive>
-          </transition>
+          <keep-alive :max="5">
+            <component :is="Component" />
+          </keep-alive>
         </router-view>
       </main>
     </div>

@@ -1,14 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { usePluginStore } from "@stores/pluginStore";
-import SLCard from "@components/common/SLCard.vue";
-import SLButton from "@components/common/SLButton.vue";
-import SLInput from "@components/common/SLInput.vue";
-import SLCheckbox from "@components/common/SLCheckbox.vue";
-import SLSwitch from "@components/common/SLSwitch.vue";
-import SLProgress from "@components/common/SLProgress.vue";
-import SLSelect from "@components/common/SLSelect.vue";
-import SLTabs from "@components/common/SLTabs.vue";
 
 type PendingCreate = {
   component_type: string;
@@ -18,15 +10,17 @@ type PendingCreate = {
 
 const pluginStore = usePluginStore();
 
-const componentMap: Record<string, any> = {
-  SLCard,
-  SLButton,
-  SLInput,
-  SLCheckbox,
-  SLSwitch,
-  SLProgress,
-  SLSelect,
-  SLTabs,
+// 动态组件映射 → CmzYa 全局注册名称 (kebab-case)
+const componentMap: Record<string, string> = {
+  SLCard: "cmz-card",
+  SLButton: "cmz-button",
+  SLInput: "cmz-input",
+  SLCheckbox: "cmz-checkbox",
+  SLSwitch: "cmz-switch",
+  SLProgress: "cmz-progress",
+  SLSelect: "cmz-select",
+  SLTabs: "cmz-tab-bar",
+  SLTabBar: "cmz-tab-bar",
 };
 
 interface RenderedComponent {
@@ -106,6 +100,9 @@ let intervalId: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   processAllPendingComponents();
   intervalId = setInterval(() => {
+    // 无待处理组件时直接跳过,不再遍历所有插件空转
+    const hasPending = (pluginStore as any).hasPendingComponents as () => boolean;
+    if (typeof hasPending === "function" && !hasPending()) return;
     processAllPendingComponents();
   }, 300);
 });
@@ -123,7 +120,7 @@ onUnmounted(() => {
     <component
       v-for="component in renderedComponents"
       :key="component.id"
-      :is="componentMap[component.type]"
+      :is="componentMap[component.type] || component.type"
       v-bind="getComponentProps(component)"
     />
   </div>

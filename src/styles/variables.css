@@ -13,12 +13,15 @@
   --sl-bg: #f8fafc;
   --sl-bg-secondary: #f1f5f9;
   --sl-bg-tertiary: #e2e8f0;
+  --sl-bg-hover: #f1f5f9;
+  --sl-bg-elevated: #ffffff;
   --sl-surface: #ffffff;
   --sl-surface-hover: #f8fafc;
   --sl-border: #e2e8f0;
   --sl-border-light: #f1f5f9;
 
   /* -- Text -- */
+  --sl-text: #0f172a;
   --sl-text-primary: #0f172a;
   --sl-text-secondary: #475569;
   --sl-text-tertiary: #94a3b8;
@@ -26,19 +29,41 @@
 
   /* -- Status -- */
   --sl-success: #22c55e;
+  --sl-success-light: #86efac;
   --sl-success-bg: rgba(34, 197, 94, 0.1);
   --sl-warning: #f59e0b;
+  --sl-warning-light: #fcd34d;
   --sl-warning-bg: rgba(245, 158, 11, 0.1);
   --sl-error: #ef4444;
+  --sl-error-light: #fca5a5;
   --sl-error-bg: rgba(239, 68, 68, 0.1);
+  /* 危险色别名，指向同一个错误色 */
+  --sl-danger: var(--sl-error);
   --sl-info: #3b82f6;
+  --sl-info-light: #93c5fd;
   --sl-info-bg: rgba(59, 130, 246, 0.1);
+  /* 控制台/组件库扩展状态色 */
+  --sl-debug: #c084fc;
+  --sl-debug-bg: rgba(192, 132, 252, 0.12);
+  --sl-notice: #22d3ee;
+  --sl-notice-bg: rgba(34, 211, 238, 0.1);
+  /* 控制台输入提示符 */
+  --sl-console-prompt: #a78bfa;
+  /* 模态/遮罩底色 */
+  --sl-overlay: rgba(0, 0, 0, 0.4);
 
   /* -- Shadows -- */
   --sl-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --sl-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
   --sl-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
   --sl-shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.1);
+  /* 立体感阴影 */
+  --sl-shadow-elevated: 0 2px 8px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.06);
+  --sl-shadow-card: 0 1px 4px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --sl-shadow-button: 0 1px 3px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --sl-shadow-button-hover: 0 2px 6px rgba(0, 0, 0, 0.1), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --sl-shadow-input: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+  --sl-shadow-input-focus: 0 0 0 3px rgba(14, 165, 233, 0.15);
 
   /* -- Border Radius -- */
   --sl-radius-xs: 4px;
@@ -77,13 +102,13 @@
   --sl-line-height-relaxed: 1.625;
 
   /* -- Transitions -- */
-  --sl-transition-fast: 0.15s ease;
-  --sl-transition-normal: 0.25s ease;
-  --sl-transition-slow: 0.4s ease;
+  /* 缓动统一 cubic-bezier(.4,0,.2,1),时长按节奏分级 */
+  --sl-transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --sl-transition-normal: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --sl-transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 
   /* -- Layout -- */
   --sl-sidebar-width: 220px;
-  --sl-sidebar-collapsed-width: 60px;
   --sl-header-height: 48px;
 
   /* -- Scrollbar -- */
@@ -101,6 +126,13 @@
   --sl-saturate-subtle: 150%;
   --sl-saturate-normal: 180%;
   --sl-saturate-strong: 200%;
+  /* 毛玻璃背景色（半透明 + blur 配合使用） */
+  --sl-glass-bg: rgba(255, 255, 255, 0.72);
+  --sl-glass-border: rgba(15, 23, 42, 0.08);
+  /* 丙烯酸（高透明 + 强模糊，适合弹出层/浮层） */
+  --sl-acrylic-bg: rgba(255, 255, 255, 0.65);
+  --sl-acrylic-bg-strong: rgba(255, 255, 255, 0.78);
+  --sl-acrylic-border: rgba(15, 23, 42, 0.08);
 }
 
 [data-theme="dark"] {
@@ -115,48 +147,102 @@
   --sl-bg: #0f1117;
   --sl-bg-secondary: #1a1d28;
   --sl-bg-tertiary: #242836;
+  --sl-bg-hover: #242836;
+  --sl-bg-elevated: #1e2130;
   --sl-surface: #1e2130;
   --sl-surface-hover: #282c3e;
   --sl-border: rgba(255, 255, 255, 0.1);
   --sl-border-light: rgba(255, 255, 255, 0.05);
 
+  --sl-text: #e2e8f0;
   --sl-text-primary: #e2e8f0;
   --sl-text-secondary: #94a3b8;
   --sl-text-tertiary: #64748b;
   --sl-text-inverse: #0f172a;
 
   --sl-success: #34d399;
+  --sl-success-light: #6ee7b7;
   --sl-success-bg: rgba(52, 211, 153, 0.12);
   --sl-warning: #fbbf24;
+  --sl-warning-light: #fde68a;
   --sl-warning-bg: rgba(251, 191, 36, 0.12);
   --sl-error: #f87171;
+  --sl-error-light: #fca5a5;
   --sl-error-bg: rgba(248, 113, 113, 0.12);
+  /* 危险色别名，指向同一个错误色 */
+  --sl-danger: var(--sl-error);
   --sl-info: #60a5fa;
+  --sl-info-light: #93c5fd;
   --sl-info-bg: rgba(96, 165, 250, 0.12);
+  /* 控制台/组件库扩展状态色 */
+  --sl-debug: #c084fc;
+  --sl-debug-bg: rgba(192, 132, 252, 0.14);
+  --sl-notice: #22d3ee;
+  --sl-notice-bg: rgba(34, 211, 238, 0.12);
+  /* 控制台输入提示符 */
+  --sl-console-prompt: #a78bfa;
+  /* 模态/遮罩底色 */
+  --sl-overlay: rgba(0, 0, 0, 0.5);
 
   --sl-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --sl-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --sl-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
   --sl-shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.6);
+  /* 立体感阴影（暗色主题） */
+  --sl-shadow-elevated: 0 2px 8px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --sl-shadow-card: 0 1px 4px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.4);
+  --sl-shadow-button: 0 1px 3px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.2);
+  --sl-shadow-button-hover: 0 2px 6px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --sl-shadow-input: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+  --sl-shadow-input-focus: 0 0 0 3px rgba(96, 165, 250, 0.2);
+  /* 毛玻璃背景色（暗色主题） */
+  --sl-glass-bg: rgba(0, 0, 0, 0.72);
+  --sl-glass-border: rgba(255, 255, 255, 0.08);
+  --sl-acrylic-bg: rgba(0, 0, 0, 0.65);
+  --sl-acrylic-bg-strong: rgba(0, 0, 0, 0.78);
+  --sl-acrylic-border: rgba(255, 255, 255, 0.06);
 }
 
-[data-acrylic="true"] {
-  --sl-bg: rgba(248, 250, 252, 0.65);
-  --sl-bg-secondary: rgba(241, 245, 249, 0.55);
-  --sl-bg-tertiary: rgba(226, 232, 240, 0.45);
-  --sl-surface: rgba(255, 255, 255, 0.65);
-  --sl-surface-hover: rgba(248, 250, 252, 0.75);
+[data-acrylic="on"] {
+  --sl-bg: rgba(255, 255, 255, 0.35);
+  --sl-bg-secondary: rgba(255, 255, 255, 0.4);
+  --sl-bg-tertiary: rgba(255, 255, 255, 0.48);
+  --sl-bg-hover: rgba(255, 255, 255, 0.48);
+  --sl-bg-elevated: transparent;
+  --sl-surface: rgba(255, 255, 255, 0.45);
+  --sl-surface-hover: rgba(255, 255, 255, 0.52);
+  /* 内容区卡片在玻璃表面上，背景更淡以保留通透感 */
+  --sl-glass-bg: rgba(255, 255, 255, 0.3);
+  --sl-glass-border: rgba(15, 23, 42, 0.06);
+  /* 浮层（下拉菜单、弹出层）- 更高的不透明度以确保可读性 */
+  --sl-acrylic-bg: rgba(255, 255, 255, 0.7);
+  --sl-acrylic-bg-strong: rgba(255, 255, 255, 0.82);
+  --sl-acrylic-border: rgba(15, 23, 42, 0.1);
 }
 
-[data-theme="dark"][data-acrylic="true"] {
-  --sl-bg: rgba(15, 17, 23, 0.65);
-  --sl-bg-secondary: rgba(26, 29, 40, 0.55);
-  --sl-bg-tertiary: rgba(36, 40, 54, 0.45);
-  --sl-surface: rgba(30, 33, 48, 0.65);
-  --sl-surface-hover: rgba(40, 44, 62, 0.75);
+/* 暗色材质:深灰环境 + 浅灰容器,灰阶分层代替纯黑压膜 */
+[data-theme="dark"][data-acrylic="on"] {
+  --sl-bg: rgba(13, 16, 24, 0.25);
+  --sl-bg-secondary: rgba(13, 16, 24, 0.3);
+  --sl-bg-tertiary: rgba(13, 16, 24, 0.35);
+  --sl-bg-hover: rgba(13, 16, 24, 0.35);
+  --sl-bg-elevated: transparent;
+  --sl-surface: rgba(42, 46, 62, 0.4);
+  --sl-surface-hover: rgba(50, 55, 74, 0.48);
+  --sl-glass-bg: rgba(0, 0, 0, 0.3);
+  --sl-glass-border: rgba(255, 255, 255, 0.06);
+  --sl-acrylic-bg: rgba(30, 33, 48, 0.72);
+  --sl-acrylic-bg-strong: rgba(30, 33, 48, 0.85);
+  --sl-acrylic-border: rgba(255, 255, 255, 0.08);
 }
 
 [data-minimal="true"] {
+  --sl-transition-fast: 0s;
+  --sl-transition-normal: 0s;
+  --sl-transition-slow: 0s;
+}
+
+[data-animation="off"] {
   --sl-transition-fast: 0s;
   --sl-transition-normal: 0s;
   --sl-transition-slow: 0s;

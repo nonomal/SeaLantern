@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
-import SLModal from "@components/common/SLModal.vue";
-import SLButton from "@components/common/SLButton.vue";
 import { useUpdateStore } from "@stores/updateStore";
 import { i18n } from "@language";
 import { downloadUpdate, installUpdate, onDownloadProgress } from "@api/update";
@@ -19,21 +17,21 @@ const buttonState = computed(() => {
   if (updateStore.status === "downloading") {
     return {
       text: `${i18n.t("about.update_downloading")} ${progressPercent.value}%`,
-      variant: "secondary" as const,
+      variant: "outline" as const,
       disabled: true,
     };
   }
   if (updateStore.status === "installing") {
     return {
       text: i18n.t("about.update_installing"),
-      variant: "secondary" as const,
+      variant: "outline" as const,
       disabled: true,
     };
   }
   if (updateStore.status === "downloaded") {
     return {
       text: i18n.t("about.update_restart_install"),
-      variant: "success" as const,
+      variant: "primary" as const,
       disabled: false,
     };
   }
@@ -50,7 +48,10 @@ const progressPercent = computed(() => {
 
 onMounted(async () => {
   unlistenProgress = await onDownloadProgress((progress) => {
-    updateStore.setDownloading(progress.percent);
+    // 事件只带 downloaded/total,按比例换算成 0-100 的进度百分比
+    updateStore.setDownloading(
+      progress.total > 0 ? Math.round((progress.downloaded / progress.total) * 100) : 0,
+    );
   });
 });
 
@@ -114,7 +115,7 @@ async function getRunningServerNames(): Promise<string[]> {
         item,
       ): item is {
         name: string;
-        status: "Stopped" | "Starting" | "Running" | "Stopping" | "Error";
+        status: "Stopped" | "Starting" | "Running" | "Stopping" | "Error" | "Unknown";
       } => item !== null,
     )
     .filter((item) => item.status === "Running")
@@ -168,12 +169,27 @@ async function handleForceAutoUpdate() {
 
   showInstallRiskConfirm.value = false;
   try {
-    await serverApi.forceStopAll();
+    await forceStopAllServers();
   } catch (error) {
     updateStore.setInstallError(String(error));
     return;
   }
   await performInstall();
+}
+
+// 后端没有 forceStopAll,并行查出 Running 的服务器再各自强制停止
+async function forceStopAllServers(): Promise<void> {
+  const servers = await serverApi.getList();
+  const statuses = await Promise.all(servers.map((server) => serverApi.getStatus(server.id)));
+  await Promise.all(
+    servers.map(async (server, i) => {
+      if (statuses[i].status !== "Running") {
+        return;
+      }
+      const prep = await serverApi.prepareForceStop(server.id);
+      await serverApi.forceStop(server.id, prep.token);
+    }),
+  );
 }
 
 function closeInstallRiskConfirm() {
@@ -182,7 +198,7 @@ function closeInstallRiskConfirm() {
 </script>
 
 <template>
-  <SLModal
+  <cmz-modal
     :visible="true"
     :title="
       updateStore.updateInfo
@@ -213,7 +229,7 @@ function closeInstallRiskConfirm() {
       </div>
 
       <div class="update-actions">
-        <SLButton
+        <cmz-button
           class="update-action-btn"
           :variant="buttonState.variant"
           size="md"
@@ -229,12 +245,12 @@ function closeInstallRiskConfirm() {
             />
             <span class="update-btn-label">{{ buttonState.text }}</span>
           </span>
-        </SLButton>
+        </cmz-button>
       </div>
     </div>
-  </SLModal>
+  </cmz-modal>
 
-  <SLModal
+  <cmz-modal
     :visible="showInstallRiskConfirm"
     :title="i18n.t('about.update_running_warning_title')"
     width="520px"
@@ -251,16 +267,17 @@ function closeInstallRiskConfirm() {
       </div>
 
       <div class="install-risk-actions">
-        <SLButton
-          variant="secondary"
+        <cmz-button
+          variant="outline"
           size="sm"
           :disabled="isInstallLaunching"
           @click="closeInstallRiskConfirm"
         >
           {{ i18n.t("about.update_cancel_update") }}
-        </SLButton>
-        <SLButton
-          variant="danger"
+        </cmz-button>
+        <cmz-button
+          variant="solid"
+          color="#ef4444"
           size="md"
           :disabled="isInstallLaunching"
           @click="handleForceAutoUpdate"
@@ -270,10 +287,10 @@ function closeInstallRiskConfirm() {
               ? i18n.t("about.update_installing")
               : i18n.t("about.update_force_auto")
           }}
-        </SLButton>
+        </cmz-button>
       </div>
     </div>
-  </SLModal>
+  </cmz-modal>
 </template>
 
 <style scoped>
@@ -442,7 +459,7 @@ function closeInstallRiskConfirm() {
   gap: var(--sl-space-sm);
 }
 
-.install-risk-actions :deep(.sl-button) {
+.install-risk-actions :deep(.cmz-button) {
   width: 100%;
 }
 </style>

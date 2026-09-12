@@ -1,15 +1,14 @@
 name: 文档更新请求
-description: 请求更新文档内容
+description: 请求新增或修改文档内容
 title: "[Docs] "
 labels: ["documentation", "pending"]
-assignees: []
 body:
   - type: textarea
     id: content
     attributes:
-      label: 文档更新内容描述
-      description: 更新什么内容？
-      placeholder: 更新什么内容？
+      label: 文档更新内容
+      description: 请说明需要更新什么内容
+      placeholder: 在哪里更新什么内容
     validations:
       required: true
 
@@ -17,16 +16,16 @@ body:
     id: reason
     attributes:
       label: 理由
-      description: 说明你为什么想要更新这个内容
-      placeholder: 说明你为什么想要更新这个内容
+      description: 可选，请说明更新这个内容的原因
+      placeholder: 在这里填写理由
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: additional
     attributes:
       label: 附加内容
-      description: 可选 - 例如界面的草图
-      placeholder: 例如界面的草图
+      description: 可选，例如具体的修改建议
+      placeholder: 在这里填写附加内容
     validations:
       required: false

@@ -28,33 +28,49 @@ export default defineConfig({
   },
   build: {
     target: "esnext",
-    minify: "terser",
-    terserOptions: {
-      compress: {
-        drop_console: false,
-        drop_debugger: true,
-      },
-    },
+    minify: "oxc",
+    // 关闭 gzip 压缩大小报告,减少构建末尾的额外 IO 开销
+    reportCompressedSize: false,
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vue-vendor": ["vue", "vue-router", "pinia"],
-          "tauri-vendor": [
-            "@tauri-apps/api",
-            "@tauri-apps/plugin-dialog",
-            "@tauri-apps/plugin-fs",
-            "@tauri-apps/plugin-http",
-            "@tauri-apps/plugin-opener",
-            "@tauri-apps/plugin-process",
-            "@tauri-apps/plugin-updater",
-          ],
-          "echarts-vendor": ["echarts", "vue-echarts"],
-          "ui-vendor": ["@headlessui/vue", "reka-ui"],
-          "utils-vendor": ["@vueuse/core", "dompurify", "lucide-vue-next"],
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("vue") || id.includes("vue-router") || id.includes("pinia")) {
+              return "vue-vendor";
+            }
+            if (id.includes("@tauri-apps")) {
+              return "tauri-vendor";
+            }
+            if (id.includes("echarts") || id.includes("vue-echarts")) {
+              return "echarts-vendor";
+            }
+            if (id.includes("@headlessui") || id.includes("reka-ui")) {
+              return "ui-vendor";
+            }
+            if (
+              id.includes("@vueuse") ||
+              id.includes("dompurify") ||
+              id.includes("lucide-vue-next")
+            ) {
+              return "utils-vendor";
+            }
+            // cmzya-modern-ui 单独拆包,避免与业务代码混在一起影响缓存命中
+            if (id.includes("cmzya-modern-ui") || id.includes("cmzya")) {
+              return "cmzya-vendor";
+            }
+            // 代码编辑器栈体积较大,独立分包
+            if (id.includes("@codemirror") || id.includes("@lezer") || id.includes("codemirror")) {
+              return "codemirror-vendor";
+            }
+            // 终端模拟器独立分包
+            if (id.includes("@xterm") || id.includes("xterm")) {
+              return "xterm-vendor";
+            }
+          }
         },
       },
     },
-    chunkSizeWarningLimit: 1000,
+    chunkSizeWarningLimit: 1500,
   },
   clearScreen: false,
   server: {
@@ -69,7 +85,7 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/target/**", "**/crates/**", "**/application/**"],
     },
   },
 });

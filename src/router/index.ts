@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { onPageChanged } from "@api/plugin";
 
 const routes = [
   {
@@ -33,10 +32,22 @@ const routes = [
     meta: { titleKey: "common.player_manage", icon: "users" },
   },
   {
+    path: "/tunnel",
+    name: "tunnel",
+    component: () => import("@views/TunnelView.vue"),
+    meta: { titleKey: "common.tunnel", icon: "link2" },
+  },
+  {
     path: "/plugins",
     name: "plugins",
-    component: () => import("@views/PluginsPageView.vue"),
+    component: () => import("@views/PluginsView.vue"),
     meta: { titleKey: "common.plugins", icon: "puzzle" },
+  },
+  {
+    path: "/resource-market",
+    name: "resource-market",
+    component: () => import("@views/ResourceMarketView.vue"),
+    meta: { titleKey: "common.resource_market", icon: "store" },
   },
   {
     path: "/market",
@@ -48,11 +59,10 @@ const routes = [
     component: () => import("@views/SettingsView.vue"),
     meta: { titleKey: "common.settings", icon: "sliders" },
   },
+  // 个性化已并入设置页,旧地址跳转保留
   {
     path: "/paint",
-    name: "paint",
-    component: () => import("@views/PaintView.vue"),
-    meta: { titleKey: "common.personalize", icon: "palette" },
+    redirect: "/settings",
   },
   {
     path: "/about",
@@ -75,35 +85,40 @@ const routes = [
     meta: { titleKey: "plugins.plugin_category", icon: "folder" },
   },
   {
-    path: "/download-file",
-    name: "download-file",
-    component: () => import("../views/DownloadFileView.vue"),
-    meta: { titleKey: "common.download-file", icon: "info" },
+    path: "/download",
+    name: "download",
+    component: () => import("../views/DownloadView.vue"),
+    meta: { titleKey: "common.download", icon: "download" },
+  },
+  {
+    path: "/backup/:id?",
+    name: "backup",
+    component: () => import("@views/BackupView.vue"),
+    meta: { titleKey: "common.backup", icon: "archive" },
+  },
+  {
+    path: "/help",
+    name: "help",
+    component: () => import("@views/HelpView.vue"),
+    meta: { titleKey: "common.help", icon: "book" },
+  },
+  // 开发者测试工具:仅在开发者模式开启时侧栏展示,路由本身始终注册
+  {
+    path: "/dev-test",
+    name: "dev-test",
+    component: () => import("@views/DevTestView.vue"),
+    meta: { titleKey: "common.dev_test", icon: "beaker" },
+  },
+  // 404 兜底:无效路径统一回到首页
+  {
+    path: "/:pathMatch(.*)*",
+    name: "not-found",
+    redirect: "/",
   },
 ];
 const router = createRouter({
   history: createWebHistory(),
   routes,
-});
-
-let pageChangedTimers: number[] = [];
-
-router.afterEach((to) => {
-  for (const t of pageChangedTimers) {
-    clearTimeout(t);
-  }
-  pageChangedTimers = [];
-
-  pageChangedTimers.push(
-    window.setTimeout(() => {
-      onPageChanged(to.path).catch(() => {});
-    }, 250),
-  );
-  pageChangedTimers.push(
-    window.setTimeout(() => {
-      onPageChanged(to.path).catch(() => {});
-    }, 900),
-  );
 });
 
 export default router;

@@ -1,0 +1,54 @@
+[package]
+name = "sealantern-infra"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+blocking = ["reqwest/blocking"]
+
+[dependencies]
+sealantern-contract = { path = "../contract" }
+atomicwrites = "0.4"
+bytes = "1"
+cap-std = "4"
+ipnet = "2"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tracing = "0.1"
+tokio = { version = "1", features = [
+    "fs",
+    "io-util",
+    "net",
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "sync",
+    "time",
+] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2.0", default-features = false, features = ["deflate"] }
+sysinfo = "0.32"
+dirs = "5"
+dirs-next = "2"
+flate2 = "1.0"
+font-kit = "0.14"
+arboard = "3"
+sysproxy = { path = "../vendor/sysproxy" }
+tar = { version = "0.4", default-features = false }
+url = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }

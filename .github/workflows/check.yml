@@ -2,29 +2,28 @@ name: "代码质量检查"
 
 on:
   pull_request:
+    branches: [main]
   push:
-    branches: [main, dev]
+    branches: [main]
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  commit_message:
-    name: 提交信息检查 (Commitlint)
-    runs-on: ubuntu-22.04
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: 校验提交信息
-        uses: wagoid/commitlint-github-action@v6
-        with:
-          configFile: commitlint.config.cjs
-
   changes:
     runs-on: ubuntu-22.04
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
+      backend-application: ${{ steps.filter.outputs['backend-application'] }}
+      backend-core: ${{ steps.filter.outputs['backend-core'] }}
+      backend-infra: ${{ steps.filter.outputs['backend-infra'] }}
+      backend-feature: ${{ steps.filter.outputs['backend-feature'] }}
+      backend-contract: ${{ steps.filter.outputs['backend-contract'] }}
+      backend-server: ${{ steps.filter.outputs['backend-server'] }}
+      backend-tauri: ${{ steps.filter.outputs['backend-tauri'] }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,109 +32,306 @@ jobs:
         with:
           filters: |
             backend:
+              - 'application/**'
+              - 'crates/**'
+              - 'server/**'
               - 'src-tauri/**'
+              - '.cargo/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'rustfmt.toml'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
+            backend-application:
+              - 'application/**'
+              - '.cargo/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rustfmt.toml'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
+            backend-core:
+              - 'crates/core/**'
+              - '.cargo/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rustfmt.toml'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
+            backend-infra:
+              - 'crates/infra/**'
+              - '.cargo/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rustfmt.toml'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
+            backend-feature:
+              - 'crates/feature/**'
+              - '.cargo/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rustfmt.toml'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
+            backend-contract:
+              - 'crates/contract/**'
+              - '.cargo/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rustfmt.toml'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
+            backend-server:
+              - 'server/**'
+              - '.cargo/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rustfmt.toml'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
+            backend-tauri:
+              - 'src-tauri/**'
+              - '.cargo/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rustfmt.toml'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
             frontend:
               - 'src/**'
+              - 'scripts/**'
+              - 'tests/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'vite.config.ts'
+              - 'knip.json'
               - 'tsconfig*.json'
               - 'index.html'
-              - 'public/**'
+              - '.oxlintrc.json'
+              - '.oxfmtrc.json'
+              - '.github/actions/**'
+              - '.github/workflows/check.yml'
+            docs:
+              - 'docs/**'
+              - 'scripts/check-docs-tmp.mjs'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - '.github/workflows/check.yml'
 
-  backend:
-    name: 后端检查 (Rust)
+  backend-lint:
+    name: 后端代码规范 (fmt + clippy)
     needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
-      - name: 后端变更检测
-        run: echo "backend changed=${{ needs.changes.outputs.backend }}"
-
       - name: 检出代码
-        if: ${{ needs.changes.outputs.backend == 'true' }}
         uses: actions/checkout@v4
 
       - name: 安装系统依赖
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf nasm
+        uses: ./.github/actions/install-tauri-dependencies
 
-      - name: 安装 Rust 工具链
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        id: rust_setup
-        uses: dtolnay/rust-toolchain@stable
+      - name: 设置 Rust 环境
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: stable
           components: rustfmt, clippy
-        continue-on-error: true
-
-      - name: 重试安装 Rust 工具链
-        if: ${{ steps.rust_setup.outcome == 'failure' && needs.changes.outputs.backend == 'true' }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-
-      - name: 缓存 Rust 编译产物
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
+          cache: "true"
+          retry: "true"
 
       - name: 检查代码格式 (Rust)
-        if: ${{ needs.changes.outputs.backend == 'true' }}
         run: cargo fmt --all -- --check
 
       - name: 运行 Clippy 检查
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  backend-test-application:
+    name: 后端测试 (application)
+    needs: [changes, backend-lint]
+    if: ${{ needs.changes.outputs['backend-application'] == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 4
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Rust 环境
+        uses: ./.github/actions/setup-rust
+
+      - name: 运行测试
+        run: cargo test -p sealantern-application
+
+  backend-test-core:
+    name: 后端测试 (core)
+    needs: [changes, backend-lint]
+    if: ${{ needs.changes.outputs['backend-core'] == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 4
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Rust 环境
+        uses: ./.github/actions/setup-rust
+
+      - name: 运行测试
+        run: cargo test -p sealantern-core --lib
+        env:
+          RUSTFLAGS: "--cfg ci_skip_validation"
+
+  backend-test-feature:
+    name: 后端测试 (feature)
+    needs: [changes, backend-lint]
+    if: ${{ needs.changes.outputs['backend-feature'] == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Rust 环境
+        uses: ./.github/actions/setup-rust
+
+      - name: 运行测试
+        run: cargo test -p sealantern-feature
+
+  backend-test-infra:
+    name: 后端测试 (infra)
+    needs: [changes, backend-lint]
+    if: ${{ needs.changes.outputs['backend-infra'] == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Rust 环境
+        uses: ./.github/actions/setup-rust
+
+      - name: 运行测试
+        run: cargo test -p sealantern-infra --all-features
+
+  backend-test-contract:
+    name: 后端测试 (contract)
+    needs: [changes, backend-lint]
+    if: ${{ needs.changes.outputs['backend-contract'] == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Rust 环境
+        uses: ./.github/actions/setup-rust
+
+      - name: 运行测试
+        run: cargo test -p sealantern-contract
+
+  backend-test-server:
+    name: 后端测试 (server)
+    needs: [changes, backend-lint]
+    if: ${{ needs.changes.outputs['backend-server'] == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Rust 环境
+        uses: ./.github/actions/setup-rust
+
+      - name: 运行测试
+        run: cargo test -p sealantern-server
+
+  backend-test-tauri:
+    name: 后端测试 (tauri)
+    needs: [changes, backend-lint]
+    if: ${{ needs.changes.outputs['backend-tauri'] == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装系统依赖
+        uses: ./.github/actions/install-tauri-dependencies
+
+      - name: 设置 Rust 环境（缓存只恢复）
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: "true"
+          cache-save: "false"
+
+      - name: 运行测试
+        run: cargo test --bin sealantern -p sealantern
+
+  backend:
+    name: 后端检查 (Rust)
+    needs:
+      [
+        backend-lint,
+        backend-test-application,
+        backend-test-core,
+        backend-test-infra,
+        backend-test-contract,
+        backend-test-server,
+        backend-test-feature,
+        backend-test-tauri,
+      ]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 汇总后端检查状态
+        run: |
+          failed=$(echo '${{ toJSON(needs) }}' | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key] | join(" ")')
+          if [[ -n "$failed" ]]; then
+            echo "::error ::后端检查失败，以下模块未通过：$failed"
+            exit 1
+          else
+            echo "所有后端模块检查通过！"
+          fi
 
   frontend:
     name: 前端检查 (Node)
     needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-22.04
     steps:
-      - name: 前端变更检测
-        run: echo "frontend changed=${{ needs.changes.outputs.frontend }}"
-
       - name: 检出代码
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
         uses: actions/checkout@v4
 
-      - name: 安装 Node.js
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: "lts/*"
-
-      - name: Prepare PNPM (固定版本)
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        run: |
-          corepack enable
-          corepack prepare pnpm@9.15.9 --activate
-
-      - name: 缓存 pnpm 依赖
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        uses: actions/cache@v4
-        with:
-          path: ~/.pnpm-store
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
+      - name: 设置 pnpm 环境
+        uses: ./.github/actions/setup-pnpm
 
       - name: 安装前端依赖
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
         run: |
           pnpm install --frozen-lockfile
 
-      - name: 运行格式化并检查前端 Lint
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        run: |
-          pnpm run fmt:check && pnpm run lint
+      - name: 运行前端全量检查
+        run: pnpm run fmt:check && pnpm run lint && pnpm run build:check
 
-      - name: 检查前端构建
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        run: pnpm run build
+      - name: Knip 死代码 dry-run（非阻塞，仅报告）
+        # TODO(#1016): 冗余项清理完毕后移除 continue-on-error，改为强制检查
+        continue-on-error: true
+        run: pnpm knip
+
+      - name: 运行前端测试
+        run: pnpm test
+
+  docs-check:
+    name: 文档临时文件检查
+    needs: changes
+    if: ${{ needs.changes.outputs.docs == 'true' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 pnpm 环境
+        uses: ./.github/actions/setup-pnpm
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验临时文档
+        run: pnpm docs:check

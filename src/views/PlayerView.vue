@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from "vue";
+// keep-alive 缓存时 onUnmounted 不触发,改用 onActivated/onDeactivated 管理刷新定时器
+import { ref, onActivated, onDeactivated, computed, watch } from "vue";
 import { useServerStore } from "@stores/serverStore";
-import { useConsoleStore } from "@stores/consoleStore";
 import { playerApi, type PlayerEntry, type BanEntry, type OpEntry } from "@api/player";
 import { TIME, MESSAGES, getMessage } from "@utils/constants";
 import { validatePlayerName, handleError } from "@utils/errorHandler";
 import { i18n } from "@language";
-import { useMessage } from "@composables/useMessage";
+import { useToast } from "cmzya-modern-ui";
 import { useLoading } from "@composables/useAsync";
 import PlayerTabs from "@components/views/player/PlayerTabs.vue";
 import PlayerActionBar from "@components/views/player/PlayerActionBar.vue";
@@ -16,7 +16,6 @@ import PlayerModals from "@components/views/player/PlayerModals.vue";
 type PlayerTab = "online" | "whitelist" | "banned" | "ops";
 
 const store = useServerStore();
-const consoleStore = useConsoleStore();
 
 const activeTab = ref<PlayerTab>("online");
 
@@ -26,7 +25,7 @@ const ops = ref<OpEntry[]>([]);
 const onlinePlayers = ref<string[]>([]);
 
 const { loading, withLoading } = useLoading();
-const { error, success, showError, showSuccess, clear: clearMessage } = useMessage();
+const toast = useToast();
 
 const showAddModal = ref(false);
 const addPlayerName = ref("");
@@ -34,13 +33,10 @@ const addBanReason = ref("");
 const addLoading = ref(false);
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
+// 页面隐藏时暂停轮询,避免后台无意义 IPC 开销
+let isPageVisible = true;
 
 const selectedServerId = computed(() => store.currentServerId || "");
-
-const serverPath = computed(() => {
-  const server = store.servers.find((s) => s.id === selectedServerId.value);
-  return server?.path || "";
-});
 
 const isRunning = computed(() => {
   return store.statuses[selectedServerId.value]?.status === "Running";
@@ -59,32 +55,67 @@ function getAddLabel(): string {
   }
 }
 
-onMounted(async () => {
-  await store.refreshList();
+onActivated(async () => {
+  isPageVisible = true;
+  try {
+    await store.refreshList();
+  } catch (e) {
+    console.warn("Failed to load servers:", e);
+  }
   if (!store.currentServerId && store.servers.length > 0) {
     store.setCurrentServer(store.servers[0].id);
   }
   if (store.currentServerId) {
     await store.refreshStatus(store.currentServerId);
     await loadAll();
-    parseOnlinePlayers();
+    await loadOnline();
   }
   startRefresh();
+  document.addEventListener("visibilitychange", handleVisibilityChange);
 });
 
-onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer);
+onDeactivated(() => {
+  stopRefresh();
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
 });
 
 function startRefresh() {
-  if (refreshTimer) clearInterval(refreshTimer);
+  stopRefresh();
   refreshTimer = setInterval(async () => {
+    if (!isPageVisible) return;
     if (selectedServerId.value) {
       await store.refreshStatus(selectedServerId.value);
       await loadAll();
-      parseOnlinePlayers();
+      await loadOnline();
     }
   }, 5000);
+}
+
+function stopRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+async function refreshNow() {
+  if (selectedServerId.value) {
+    await store.refreshStatus(selectedServerId.value);
+    await loadAll();
+    await loadOnline();
+  }
+}
+
+function handleVisibilityChange() {
+  const visible = document.visibilityState === "visible";
+  if (visible === isPageVisible) return;
+  isPageVisible = visible;
+  if (visible) {
+    void refreshNow();
+    startRefresh();
+  } else {
+    stopRefresh();
+  }
 }
 
 watch(
@@ -93,56 +124,61 @@ watch(
     if (store.currentServerId) {
       await store.refreshStatus(store.currentServerId);
       await loadAll();
-      parseOnlinePlayers();
+      await loadOnline();
     }
   },
 );
 
+// 加载请求序号:快速切换服务器时丢弃过期响应,避免旧数据覆盖当前服务器
+let loadSeq = 0;
+// 在线玩家请求单独的序号,因为 loadOnline 可被 handleKick 独立触发
+let onlineLoadSeq = 0;
+
 async function loadAll() {
-  if (!serverPath.value) return;
+  if (!selectedServerId.value) return;
+  const seq = ++loadSeq;
+  const sid = selectedServerId.value;
   await withLoading(async () => {
-    whitelist.value = await playerApi.getWhitelist(serverPath.value);
-    bannedPlayers.value = await playerApi.getBannedPlayers(serverPath.value);
-    ops.value = await playerApi.getOps(serverPath.value);
+    try {
+      // 三个接口互不依赖,并行拉取降低总延迟；只传 server_id,目录由后端
+      // 经实例注册表解析（不信任前端 server_path,避免 A/B 服数据错位）
+      const [whitelistRes, bannedRes, opsRes] = await Promise.all([
+        playerApi.getWhitelist(sid),
+        playerApi.getBannedPlayers(sid),
+        playerApi.getOps(sid),
+      ]);
+      // 期间已切换服务器,丢弃这次过期结果
+      if (seq !== loadSeq || sid !== selectedServerId.value) return;
+      whitelist.value = whitelistRes;
+      bannedPlayers.value = bannedRes;
+      ops.value = opsRes;
+    } catch (e) {
+      if (seq !== loadSeq || sid !== selectedServerId.value) return;
+      console.error("[players] 加载白名单/封禁/OP 失败:", e);
+      toast.error(`加载白名单/封禁/OP 失败: ${handleError(e, "LoadPlayers")}`);
+    }
   });
 }
 
-function parseOnlinePlayers() {
+async function loadOnline() {
+  if (!isRunning.value || !selectedServerId.value) {
+    onlinePlayers.value = [];
+    return;
+  }
+  const seq = ++onlineLoadSeq;
   const sid = selectedServerId.value;
-  const logs = consoleStore.logs[sid] || [];
-  const players: string[] = [];
-
-  let startIndex = 0;
-  for (let i = logs.length - 1; i >= 0; i--) {
-    const line = logs[i];
-    if (/Done \([\d.]+s\)! For help/.test(line) || /Starting minecraft server/i.test(line)) {
-      startIndex = i;
-      break;
-    }
+  try {
+    // 在线玩家来自服务器 list 命令的实时回显,而非解析历史日志
+    const names = await playerApi.getOnlinePlayers(sid);
+    // 期间已切换服务器或发起新请求,丢弃这次过期结果
+    if (seq !== onlineLoadSeq || sid !== selectedServerId.value) return;
+    onlinePlayers.value = names;
+  } catch (e) {
+    if (seq !== onlineLoadSeq || sid !== selectedServerId.value) return;
+    console.error("[players] 加载在线玩家失败:", e);
+    onlinePlayers.value = [];
+    toast.error(`加载在线玩家失败: ${handleError(e, "LoadOnlinePlayers")}`);
   }
-
-  for (let i = startIndex; i < logs.length; i++) {
-    const line = logs[i];
-    const joinMatch = line.match(/\]: (\w+) joined the game/);
-    const loginMatch = line.match(/\]: UUID of player (\w+) is/);
-    const leftMatch = line.match(/\]: (\w+) left the game/);
-
-    if (joinMatch) {
-      const name = joinMatch[1];
-      if (!players.includes(name)) players.push(name);
-    }
-    if (loginMatch) {
-      const name = loginMatch[1];
-      if (!players.includes(name)) players.push(name);
-    }
-    if (leftMatch) {
-      const name = leftMatch[1];
-      const idx = players.indexOf(name);
-      if (idx > -1) players.splice(idx, 1);
-    }
-  }
-
-  onlinePlayers.value = players;
 }
 
 function openAddModal() {
@@ -154,12 +190,12 @@ function openAddModal() {
 async function handleAdd() {
   const validation = validatePlayerName(addPlayerName.value);
   if (!validation.valid) {
-    showError(validation.error || getMessage(MESSAGES.ERROR.INVALID_PLAYER_NAME));
+    toast.error(validation.error || getMessage(MESSAGES.ERROR.INVALID_PLAYER_NAME));
     return;
   }
 
   if (!isRunning.value) {
-    showError(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
+    toast.error(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
     return;
   }
 
@@ -169,15 +205,15 @@ async function handleAdd() {
     switch (activeTab.value) {
       case "whitelist":
         await playerApi.addToWhitelist(sid, addPlayerName.value);
-        showSuccess(getMessage(MESSAGES.SUCCESS.WHITELIST_ADDED));
+        toast.success(getMessage(MESSAGES.SUCCESS.WHITELIST_ADDED));
         break;
       case "banned":
         await playerApi.banPlayer(sid, addPlayerName.value, addBanReason.value);
-        showSuccess(getMessage(MESSAGES.SUCCESS.PLAYER_BANNED));
+        toast.success(getMessage(MESSAGES.SUCCESS.PLAYER_BANNED));
         break;
       case "ops":
         await playerApi.addOp(sid, addPlayerName.value);
-        showSuccess(getMessage(MESSAGES.SUCCESS.OP_ADDED));
+        toast.success(getMessage(MESSAGES.SUCCESS.OP_ADDED));
         break;
     }
     showAddModal.value = false;
@@ -185,7 +221,7 @@ async function handleAdd() {
       loadAll();
     }, TIME.SUCCESS_MESSAGE_DURATION);
   } catch (e) {
-    showError(handleError(e, "AddPlayer"));
+    toast.error(handleError(e, "AddPlayer"));
   } finally {
     addLoading.value = false;
   }
@@ -193,105 +229,102 @@ async function handleAdd() {
 
 async function handleRemoveWhitelist(name: string) {
   if (!isRunning.value) {
-    showError(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
+    toast.error(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
     return;
   }
   try {
     await playerApi.removeFromWhitelist(selectedServerId.value, name);
-    showSuccess(getMessage(MESSAGES.SUCCESS.WHITELIST_REMOVED));
+    toast.success(getMessage(MESSAGES.SUCCESS.WHITELIST_REMOVED));
     setTimeout(() => loadAll(), TIME.SUCCESS_MESSAGE_DURATION);
   } catch (e) {
-    showError(handleError(e, "RemoveWhitelist"));
+    toast.error(handleError(e, "RemoveWhitelist"));
   }
 }
 
 async function handleUnban(name: string) {
   if (!isRunning.value) {
-    showError(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
+    toast.error(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
     return;
   }
   try {
     await playerApi.unbanPlayer(selectedServerId.value, name);
-    showSuccess(getMessage(MESSAGES.SUCCESS.PLAYER_UNBANNED));
+    toast.success(getMessage(MESSAGES.SUCCESS.PLAYER_UNBANNED));
     setTimeout(() => loadAll(), TIME.SUCCESS_MESSAGE_DURATION);
   } catch (e) {
-    showError(handleError(e, "UnbanPlayer"));
+    toast.error(handleError(e, "UnbanPlayer"));
   }
 }
 
 async function handleRemoveOp(name: string) {
   if (!isRunning.value) {
-    showError(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
+    toast.error(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
     return;
   }
   try {
     await playerApi.removeOp(selectedServerId.value, name);
-    showSuccess(getMessage(MESSAGES.SUCCESS.OP_REMOVED));
+    toast.success(getMessage(MESSAGES.SUCCESS.OP_REMOVED));
     setTimeout(() => loadAll(), TIME.SUCCESS_MESSAGE_DURATION);
   } catch (e) {
-    showError(handleError(e, "RemoveOp"));
+    toast.error(handleError(e, "RemoveOp"));
   }
 }
 
 async function handleKick(name: string) {
   if (!isRunning.value) {
-    showError(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
+    toast.error(getMessage(MESSAGES.ERROR.SERVER_NOT_RUNNING));
     return;
   }
   try {
     await playerApi.kickPlayer(selectedServerId.value, name);
-    showSuccess(`${name} ${getMessage(MESSAGES.SUCCESS.PLAYER_KICKED)}`);
-    setTimeout(() => parseOnlinePlayers(), TIME.SUCCESS_MESSAGE_DURATION);
+    toast.success(`${name} ${getMessage(MESSAGES.SUCCESS.PLAYER_KICKED)}`);
+    setTimeout(() => loadOnline(), TIME.SUCCESS_MESSAGE_DURATION);
   } catch (e) {
-    showError(handleError(e, "KickPlayer"));
+    toast.error(handleError(e, "KickPlayer"));
   }
 }
 </script>
 
 <template>
-  <div class="player-view animate-fade-in-up">
+  <div class="player-view animate-stagger-in">
     <div v-if="!selectedServerId" class="player-empty-state">
       <p class="text-body">{{ i18n.t("players.no_server") }}</p>
     </div>
 
     <template v-else>
-      <div v-if="error" class="player-msg-banner error-banner">
-        <span>{{ error }}</span>
-        <button @click="clearMessage('error')">x</button>
+      <div class="player-content-layout">
+        <PlayerTabs
+          v-model="activeTab"
+          :onlineCount="onlinePlayers.length"
+          :whitelistCount="whitelist.length"
+          :bannedCount="bannedPlayers.length"
+          :opsCount="ops.length"
+        />
+
+        <div class="player-main">
+          <PlayerActionBar
+            v-if="activeTab !== 'online'"
+            :label="getAddLabel()"
+            :disabled="!isRunning"
+            @add="openAddModal"
+            @refresh="loadAll"
+          />
+
+          <PlayerList
+            :loading="loading"
+            :tab="activeTab"
+            :server-id="selectedServerId"
+            :onlinePlayers="onlinePlayers"
+            :whitelist="whitelist"
+            :bannedPlayers="bannedPlayers"
+            :ops="ops"
+            :serverRunning="isRunning"
+            @kick="handleKick"
+            @removeWhitelist="handleRemoveWhitelist"
+            @unban="handleUnban"
+            @removeOp="handleRemoveOp"
+          />
+        </div>
       </div>
-      <div v-if="success" class="player-msg-banner success-banner">
-        <span>{{ success }}</span>
-      </div>
-
-      <PlayerTabs
-        v-model="activeTab"
-        :onlineCount="onlinePlayers.length"
-        :whitelistCount="whitelist.length"
-        :bannedCount="bannedPlayers.length"
-        :opsCount="ops.length"
-      />
-
-      <PlayerActionBar
-        v-if="activeTab !== 'online'"
-        :label="getAddLabel()"
-        :disabled="!isRunning"
-        @add="openAddModal"
-        @refresh="loadAll"
-      />
-
-      <PlayerList
-        :loading="loading"
-        :tab="activeTab"
-        :onlinePlayers="onlinePlayers"
-        :whitelist="whitelist"
-        :bannedPlayers="bannedPlayers"
-        :ops="ops"
-        :serverRunning="isRunning"
-        @kick="handleKick"
-        @removeWhitelist="handleRemoveWhitelist"
-        @unban="handleUnban"
-        @removeOp="handleRemoveOp"
-      />
 
       <PlayerModals
         v-model:visible="showAddModal"
@@ -321,29 +354,19 @@ async function handleKick(name: string) {
   padding: var(--sl-space-2xl);
 }
 
-.player-msg-banner {
+.player-content-layout {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px;
-  border-radius: var(--sl-radius-md);
-  font-size: 0.875rem;
+  align-items: flex-start;
+  flex: 1;
+  min-height: 0;
 }
 
-.error-banner {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  color: var(--sl-error);
-}
-
-.success-banner {
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.2);
-  color: var(--sl-success);
-}
-
-.player-msg-banner button {
-  font-weight: 600;
-  color: inherit;
+.player-main {
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-md);
+  min-width: 0;
 }
 </style>

@@ -38,7 +38,7 @@ export const contributors: Contributor[] = [
   },
   {
     name: "CmzYa",
-    role: "统一前端组件，赛博擒矢蝗",
+    role: "统一（md成手搓了）前端组件，赛博擒矢蝗",
     avatar: "https://api.rms.net.cn/head/CmzYa",
     url: {
       github: "https://github.com/CmzYa",
@@ -97,7 +97,7 @@ export const contributors: Contributor[] = [
   {
     name: "清初Lucky",
     role: "喵喵喵~",
-    avatar: "https://api.rms.net.cn/head/qingchu2010",
+    avatar: "https://api.rms.net.cn/head/QINGCHU_MC",
   },
   {
     name: "ieshishinjin",
@@ -117,10 +117,11 @@ export const contributors: Contributor[] = [
   },
   {
     name: "皓天是条龙",
-    role: "增加了一点新功能",
+    role: "SeaLantern掌管下载的神",
     avatar: "https://api.rms.net.cn/head/zhu_hao_tian",
     url: {
       github: "https://github.com/zhu1h1t1",
+      bilibili: "https://space.bilibili.com/3461582583498915",
     },
   },
   {
@@ -133,7 +134,7 @@ export const contributors: Contributor[] = [
   },
   {
     name: "欧耶熊猫人",
-    role: "Github文档转英文",
+    role: "Doc翻译&一点code(Lint我恨你)",
     avatar: "https://api.rms.net.cn/head/Pandaman_AF",
     url: {
       github: "https://github.com/PandamanAF",
@@ -155,10 +156,12 @@ export const contributors: Contributor[] = [
   },
   {
     name: "TNTXZ",
-    role: "诶嘿~",
+    role: "诶嘿~（项目i18n开创者）",
     avatar: "https://api.rms.net.cn/head/_TNTXZ_",
     url: {
       github: "https://github.com/TNTXZ",
+      bilibili: "https://space.bilibili.com/1515387402",
+      qq: "35266332",
     },
   },
   {
@@ -219,6 +222,14 @@ export const contributors: Contributor[] = [
     name: "NIUNIU3303",
     role: "必火推荐！",
     avatar: "https://api.rms.net.cn/head/NIUNIU3303",
+  },
+  {
+    name: "hjcba",
+    role: "添加了 mclo.gs 日志分享功能(也许后面会写更多功能)",
+    avatar: "https://api.rms.net.cn/head/hjcboar",
+    url: {
+      github: "https://github.com/hjcba",
+    },
   },
 
   // ============================================

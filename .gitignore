@@ -2,6 +2,7 @@ node_modules/
 dist/
 src-tauri/target/
 target/
+.pnpm-store/
 
 .idea/
 *.log
@@ -14,8 +15,29 @@ bun.lock
 nul
 changelogs/
 .claude/
+.codex
 .trae/
 changelog/
 .review/
 plugin-market/
 plugins-demo/
+
+# About OpenCode
+.opencode/
+.playwright-mcp/
+
+#docker test
+/data/
+CLAUDE.md
+
+# smoke test
+target-goal-smoke/
+/tmp/
+
+.tmp*
+
+#常用编辑器的储存配置路径
+.vscode/
+.vsc/
+idea/
+.zed

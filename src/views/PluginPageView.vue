@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
-import SLCard from "@components/common/SLCard.vue";
-import SLButton from "@components/common/SLButton.vue";
-import SLSwitch from "@components/common/SLSwitch.vue";
-import SLInput from "@components/common/SLInput.vue";
-import SLSelect from "@components/common/SLSelect.vue";
 import { usePluginStore } from "@stores/pluginStore";
 import { i18n } from "@language";
 import type { PluginInfo } from "@type/plugin";
-import { getLocalizedPluginName, getLocalizedPluginDescription } from "@type/plugin";
+import {
+  getLocalizedPluginName,
+  getLocalizedPluginDescription,
+  getPluginSettingDefaultValue,
+} from "@type/plugin";
 import { ArrowLeft, Puzzle, Link } from "lucide-vue-next";
 
 const props = defineProps<{
@@ -49,7 +48,7 @@ async function loadPlugin() {
       if (plugin.value.manifest.settings) {
         for (const field of plugin.value.manifest.settings) {
           settingsForm[field.key] =
-            savedSettings[field.key] ?? field.default ?? getDefaultValue(field.type);
+            savedSettings[field.key] ?? field.default ?? getPluginSettingDefaultValue(field.type);
         }
       }
 
@@ -81,7 +80,8 @@ async function loadDependentPlugins() {
       const depSettings = await pluginStore.getPluginSettings(p.manifest.id);
       const form: Record<string, any> = {};
       for (const field of p.manifest.settings!) {
-        form[field.key] = depSettings[field.key] ?? field.default ?? getDefaultValue(field.type);
+        form[field.key] =
+          depSettings[field.key] ?? field.default ?? getPluginSettingDefaultValue(field.type);
       }
       return { plugin: p, form };
     });
@@ -90,19 +90,6 @@ async function loadDependentPlugins() {
   for (const { plugin: depPlugin, form } of results) {
     dependentPlugins.value.push(depPlugin);
     dependentSettingsForms[depPlugin.manifest.id] = form;
-  }
-}
-
-function getDefaultValue(type: string): any {
-  switch (type) {
-    case "boolean":
-      return false;
-    case "number":
-      return 0;
-    case "select":
-      return "";
-    default:
-      return "";
   }
 }
 
@@ -151,7 +138,7 @@ async function saveSettings() {
 async function resetToDefault() {
   if (!plugin.value?.manifest.settings) return;
   for (const field of plugin.value.manifest.settings) {
-    settingsForm[field.key] = field.default ?? getDefaultValue(field.type);
+    settingsForm[field.key] = field.default ?? getPluginSettingDefaultValue(field.type);
   }
 }
 
@@ -174,15 +161,15 @@ watch(
 <template>
   <div class="plugin-page-view">
     <div class="page-header">
-      <SLButton variant="ghost" @click="goBack">
+      <cmz-button variant="ghost" @click="goBack">
         <ArrowLeft :size="20" />
         <span>{{ i18n.t("plugins.back") }}</span>
-      </SLButton>
+      </cmz-button>
       <h1 class="page-title" v-if="plugin">{{ plugin.manifest.name }}</h1>
     </div>
 
     <div v-if="loading" class="loading-state">
-      <div class="spinner"></div>
+      <cmz-spinner size="sm" />
       <span>{{ i18n.t("common.loading") }}</span>
     </div>
 
@@ -191,7 +178,7 @@ watch(
     </div>
 
     <div v-else class="plugin-content">
-      <SLCard class="info-card">
+      <cmz-card class="info-card">
         <div class="plugin-info">
           <div class="plugin-icon" v-if="pluginStore.icons[plugin.manifest.id]">
             <img :src="pluginStore.icons[plugin.manifest.id]" :alt="plugin.manifest.name" />
@@ -212,25 +199,25 @@ watch(
             </div>
           </div>
         </div>
-      </SLCard>
+      </cmz-card>
 
-      <SLCard v-if="isThemeProvider && pluginPresets" class="presets-card">
+      <cmz-card v-if="isThemeProvider && pluginPresets" class="presets-card">
         <h3 class="section-title">{{ i18n.t("plugins.preset_theme") }}</h3>
         <div class="presets-grid">
-          <SLButton
+          <cmz-button
             v-for="(presetData, presetKey) in pluginPresets"
             :key="presetKey"
-            variant="secondary"
+            variant="outline"
             class="preset-btn"
             @click="applyPreset(String(presetKey))"
           >
             <span class="preset-name">{{ (presetData as any).name ?? presetKey }}</span>
-          </SLButton>
+          </cmz-button>
         </div>
-      </SLCard>
+      </cmz-card>
 
       <template v-if="plugin.manifest.settings?.length">
-        <SLCard class="settings-card">
+        <cmz-card class="settings-card">
           <h3 class="section-title">{{ i18n.t("plugins.plugin_settings") }}</h3>
           <div class="settings-form">
             <div v-for="field in plugin.manifest.settings" :key="field.key" class="form-field">
@@ -239,28 +226,28 @@ watch(
                 <span v-if="field.description" class="field-desc">{{ field.description }}</span>
               </label>
               <template v-if="field.type === 'string'">
-                <SLInput v-model="settingsForm[field.key]" />
+                <cmz-input v-model="settingsForm[field.key]" />
               </template>
               <template v-else-if="field.type === 'number'">
-                <SLInput type="number" v-model="settingsForm[field.key]" />
+                <cmz-input type="number" v-model="settingsForm[field.key]" />
               </template>
               <template v-else-if="field.type === 'boolean'">
-                <SLSwitch
+                <cmz-switch
                   :modelValue="Boolean(settingsForm[field.key])"
                   @update:modelValue="settingsForm[field.key] = $event"
                   size="sm"
                 />
               </template>
               <template v-else-if="field.type === 'select'">
-                <SLSelect v-model="settingsForm[field.key]" :options="field.options" />
+                <cmz-select v-model="settingsForm[field.key]" :options="field.options" />
               </template>
             </div>
           </div>
-        </SLCard>
+        </cmz-card>
       </template>
 
       <template v-if="dependentPlugins.length > 0">
-        <SLCard
+        <cmz-card
           v-for="depPlugin in dependentPlugins"
           :key="depPlugin.manifest.id"
           class="settings-card dependent-settings"
@@ -279,16 +266,16 @@ watch(
                 <span v-if="field.description" class="field-desc">{{ field.description }}</span>
               </label>
               <template v-if="field.type === 'string'">
-                <SLInput v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]" />
+                <cmz-input v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]" />
               </template>
               <template v-else-if="field.type === 'number'">
-                <SLInput
+                <cmz-input
                   type="number"
                   v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]"
                 />
               </template>
               <template v-else-if="field.type === 'boolean'">
-                <SLSwitch
+                <cmz-switch
                   :modelValue="Boolean(dependentSettingsForms[depPlugin.manifest.id][field.key])"
                   @update:modelValue="
                     dependentSettingsForms[depPlugin.manifest.id][field.key] = $event
@@ -297,23 +284,23 @@ watch(
                 />
               </template>
               <template v-else-if="field.type === 'select'">
-                <SLSelect
+                <cmz-select
                   v-model="dependentSettingsForms[depPlugin.manifest.id][field.key]"
                   :options="field.options"
                 />
               </template>
             </div>
           </div>
-        </SLCard>
+        </cmz-card>
       </template>
 
       <div class="action-buttons">
-        <SLButton variant="secondary" @click="resetToDefault">{{
+        <cmz-button variant="outline" @click="resetToDefault">{{
           i18n.t("plugins.reset_default")
-        }}</SLButton>
-        <SLButton variant="primary" :loading="saving" @click="saveSettings">{{
+        }}</cmz-button>
+        <cmz-button :loading="saving" @click="saveSettings">{{
           i18n.t("plugins.save_settings")
-        }}</SLButton>
+        }}</cmz-button>
       </div>
     </div>
   </div>
@@ -344,7 +331,13 @@ watch(
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    color 0.2s,
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s,
+    opacity 0.2s;
 }
 
 .back-btn:hover {
@@ -368,21 +361,6 @@ watch(
   padding: 64px;
   color: var(--text-secondary);
   gap: 16px;
-}
-
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--accent-primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .plugin-content {
@@ -480,7 +458,13 @@ watch(
   border: 2px solid var(--border-color);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    color 0.2s,
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s,
+    opacity 0.2s;
 }
 
 .preset-btn:hover {
@@ -614,7 +598,13 @@ watch(
   color: var(--text-secondary);
   font-size: var(--sl-font-size-sm);
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    color 0.2s,
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s,
+    opacity 0.2s;
 }
 
 .effect-btn:hover {
@@ -694,7 +684,13 @@ watch(
   color: var(--text-primary);
   font-size: 0.9rem;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    color 0.2s,
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s,
+    opacity 0.2s;
 }
 
 .ie-btn:hover {

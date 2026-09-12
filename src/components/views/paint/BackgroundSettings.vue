@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { ChevronDown } from "lucide-vue-next";
-import SLButton from "@components/common/SLButton.vue";
-import SLSelect from "@components/common/SLSelect.vue";
 import { i18n } from "@language";
 import { computed, ref, watch } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -118,7 +116,7 @@ function handleImageLoad() {
           <div class="bg-image-picker">
             <div v-if="backgroundImage" class="bg-preview">
               <div v-if="bgPreviewLoading && !bgPreviewLoaded" class="bg-preview-loading">
-                <div class="loading-spinner"></div>
+                <cmz-spinner size="sm" />
                 <span>{{ i18n.t("settings.loading_preview") }}</span>
               </div>
               <img
@@ -135,22 +133,22 @@ function handleImageLoad() {
               </div>
               <div class="bg-preview-overlay">
                 <span class="bg-preview-path">{{ backgroundImage.split("\\").pop() }}</span>
-                <SLButton variant="danger" size="sm" @click="emit('clearImage')">{{
+                <cmz-button variant="solid" color="#ef4444" size="sm" @click="emit('clearImage')">{{
                   i18n.t("settings.remove")
-                }}</SLButton>
+                }}</cmz-button>
               </div>
             </div>
-            <SLButton v-else variant="secondary" @click="emit('pickImage')">
+            <cmz-button v-else variant="outline" @click="emit('pickImage')">
               {{ i18n.t("settings.pick_image") }}
-            </SLButton>
-            <SLButton
+            </cmz-button>
+            <cmz-button
               v-if="backgroundImage"
-              variant="secondary"
+              variant="outline"
               size="sm"
               @click="emit('pickImage')"
             >
               {{ i18n.t("settings.replace_image") }}
-            </SLButton>
+            </cmz-button>
           </div>
         </div>
 
@@ -217,7 +215,7 @@ function handleImageLoad() {
             <span class="setting-desc">{{ i18n.t("settings.background_size_desc") }}</span>
           </div>
           <div class="input-lg">
-            <SLSelect
+            <cmz-select
               :model-value="backgroundSize"
               :options="backgroundSizeOptions"
               @update:model-value="handleBackgroundSizeChange"
@@ -259,7 +257,13 @@ function handleImageLoad() {
   height: 32px;
   border-radius: var(--sl-radius-sm);
   color: var(--sl-text-secondary);
-  transition: all var(--sl-transition-normal);
+  transition:
+    color var(--sl-transition-normal),
+    background-color var(--sl-transition-normal),
+    border-color var(--sl-transition-normal),
+    box-shadow var(--sl-transition-normal),
+    transform var(--sl-transition-normal),
+    opacity var(--sl-transition-normal);
   flex-shrink: 0;
 }
 
@@ -279,7 +283,13 @@ function handleImageLoad() {
 
 .collapse-enter-active,
 .collapse-leave-active {
-  transition: all 0.3s ease;
+  transition:
+    color 0.3s ease,
+    background-color 0.3s ease,
+    border-color 0.3s ease,
+    box-shadow 0.3s ease,
+    transform 0.3s ease,
+    opacity 0.3s ease;
   overflow: hidden;
 }
 
@@ -336,7 +346,7 @@ function handleImageLoad() {
 }
 
 .input-lg {
-  width: 320px;
+  width: 200px;
   flex-shrink: 0;
 }
 
@@ -377,21 +387,6 @@ function handleImageLoad() {
   background: var(--sl-surface);
   color: var(--sl-text-secondary);
   font-size: 0.875rem;
-}
-
-.loading-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--sl-border);
-  border-top-color: var(--sl-primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .bg-animated-badge {
@@ -452,7 +447,13 @@ function handleImageLoad() {
   border-radius: 50%;
   background: var(--sl-primary);
   cursor: pointer;
-  transition: all var(--sl-transition-fast);
+  transition:
+    color var(--sl-transition-fast),
+    background-color var(--sl-transition-fast),
+    border-color var(--sl-transition-fast),
+    box-shadow var(--sl-transition-fast),
+    transform var(--sl-transition-fast),
+    opacity var(--sl-transition-fast);
 }
 
 .sl-slider::-webkit-slider-thumb:hover {
@@ -467,7 +468,13 @@ function handleImageLoad() {
   background: var(--sl-primary);
   cursor: pointer;
   border: none;
-  transition: all var(--sl-transition-fast);
+  transition:
+    color var(--sl-transition-fast),
+    background-color var(--sl-transition-fast),
+    border-color var(--sl-transition-fast),
+    box-shadow var(--sl-transition-fast),
+    transform var(--sl-transition-fast),
+    opacity var(--sl-transition-fast);
 }
 
 .sl-slider::-moz-range-thumb:hover {

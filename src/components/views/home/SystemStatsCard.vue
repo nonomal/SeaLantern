@@ -1,7 +1,6 @@
 <script setup lang="ts">
+import { defineAsyncComponent, markRaw } from "vue";
 import { Menu, Gauge } from "lucide-vue-next";
-import SLCard from "@components/common/SLCard.vue";
-import SLProgress from "@components/common/SLProgress.vue";
 import { i18n } from "@language";
 import {
   systemInfo,
@@ -18,13 +17,31 @@ import {
 } from "@utils/statsUtils";
 import { formatBytes } from "@utils/serverUtils";
 
+// 异步加载 ECharts,避免应用启动时立即加载图表栈
+// markRaw 阻止 Vue 对组件实例做响应式代理
+const VChart = markRaw(
+  defineAsyncComponent(async () => {
+    const [{ default: VueECharts }, { use }] = await Promise.all([
+      import("vue-echarts"),
+      import("echarts/core"),
+    ]);
+    const [{ PieChart, LineChart }, { GridComponent }, { CanvasRenderer }] = await Promise.all([
+      import("echarts/charts"),
+      import("echarts/components"),
+      import("echarts/renderers"),
+    ]);
+    use([GridComponent, PieChart, LineChart, CanvasRenderer]);
+    return VueECharts;
+  }),
+);
+
 function toggleViewMode() {
   statsViewMode.value = statsViewMode.value === "gauge" ? "detail" : "gauge";
 }
 </script>
 
 <template>
-  <SLCard variant="solid" class="stats-card">
+  <cmz-card class="stats-card">
     <template #header>
       <div class="stats-card-header">
         <span class="card-title">{{ i18n.t("home.system_resources") }}</span>
@@ -41,8 +58,8 @@ function toggleViewMode() {
       </div>
     </template>
 
-    <div v-if="statsLoading" class="stats-loading">
-      <div class="spinner"></div>
+    <div v-if="statsLoading && !systemInfo" class="stats-loading">
+      <cmz-spinner size="sm" />
       <span>{{ i18n.t("common.loading") }}</span>
     </div>
 
@@ -136,17 +153,17 @@ function toggleViewMode() {
           </span>
           <span class="stat-value">{{ diskUsage }}%</span>
         </div>
-        <SLProgress :value="diskUsage" variant="warning" :showPercent="false" />
+        <cmz-progress :value="diskUsage" color="#f59e0b" :showPercent="false" />
       </div>
     </div>
-  </SLCard>
+  </cmz-card>
 </template>
 
 <style scoped>
 .stats-card {
-  height: 280px;
   display: flex;
   flex-direction: column;
+  font-family: var(--sl-font-sans);
 }
 
 .stats-card-header {
@@ -173,11 +190,17 @@ function toggleViewMode() {
   border-radius: var(--sl-radius-sm);
   color: var(--sl-text-secondary);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease,
+    opacity 0.2s ease;
 }
 
 .view-toggle:hover {
-  background: var(--sl-bg-hover);
+  background: var(--sl-surface-hover);
   color: var(--sl-text-primary);
   transform: scale(1.05);
 }
@@ -187,12 +210,12 @@ function toggleViewMode() {
   align-items: center;
   justify-content: center;
   gap: var(--sl-space-sm);
-  min-height: 240px;
+  min-height: 0;
   color: var(--sl-text-tertiary);
 }
 
 .gauge-view {
-  min-height: 240px;
+  min-height: 0;
 }
 
 .gauge-grid {
@@ -243,22 +266,22 @@ function toggleViewMode() {
 
 .detail-value {
   font-size: 0.6875rem;
-  font-family: var(--sl-font-mono);
+  font-family: var(--sl-font-sans);
   color: var(--sl-text-secondary);
 }
 
 .stats-grid {
   display: flex;
   flex-direction: column;
-  gap: var(--sl-space-sm);
-  padding: var(--sl-space-xs) 0;
-  min-height: 240px;
+  gap: var(--sl-space-xs);
+  padding: 0;
+  min-height: 0;
 }
 
 .stat-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .stat-header {
@@ -276,19 +299,20 @@ function toggleViewMode() {
 .stat-value {
   font-size: 0.875rem;
   font-weight: 600;
-  font-family: var(--sl-font-mono);
+  font-family: var(--sl-font-sans);
+  color: var(--sl-text-primary);
 }
 
 .stat-detail {
   font-size: 0.75rem;
   color: var(--sl-text-tertiary);
-  font-family: var(--sl-font-mono);
+  font-family: var(--sl-font-sans);
   font-weight: 400;
 }
 
 .mini-chart {
   width: 100%;
-  height: 30px;
+  height: 22px;
   background: var(--sl-bg-secondary);
   border-radius: var(--sl-radius-xs);
   overflow: hidden;
